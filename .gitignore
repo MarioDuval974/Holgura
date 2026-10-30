@@ -1,0 +1,8 @@
+# Configuración local de Claude (no forma parte de la app)
+.claude/
+
+# Copias de seguridad exportadas desde la app: contienen tus datos, nunca se suben
+holgura-copia-*.json
+
+Thumbs.db
+desktop.ini
