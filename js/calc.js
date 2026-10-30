@@ -110,7 +110,105 @@ export function chargeDateInCycle(item, cycleStart) {
   return Number(item.day) >= d ? sameMonth : makeDate(y, m, item.day);
 }
 
-// ---------- Aprendizaje ----------
+// ---------- Fines de semana ----------
+
+// Un día de fin de semana "pesa" weekendFactor días entre semana (se suele gastar más)
+export function isWeekend(date, settings) {
+  const wd = weekday(date);
+  return wd === 0 || wd === 6 || (Boolean(settings.fridayWeekend) && wd === 5);
+}
+export const dayWeight = (date, settings) => (isWeekend(date, settings) ? Number(settings.weekendFactor) || 1 : 1);
+
+// Suma de pesos de los días en [from, to)
+export function weightedDays(from, to, settings) {
+  let w = 0;
+  for (let d = from; d < to; d = addDays(d, 1)) w += dayWeight(d, settings);
+  return w;
+}
+
+// Reparte un presupuesto entre los días de [from, to): cuánto toca a un día entre semana, a uno de
+// fin de semana, a lo que queda de esta semana (hasta el domingo) y a una semana completa
+export function spendingPlan(budget, from, to, settings) {
+  const factor = Number(settings.weekendFactor) || 1;
+  const unit = Math.max(0, budget) / Math.max(1, weightedDays(from, to, settings));
+  const nextMonday = addDays(from, ((8 - weekday(from)) % 7) || 7);
+  const weekEnd = nextMonday < to ? nextMonday : to;
+  return {
+    weekday: unit,
+    weekend: unit * factor,
+    thisWeek: weightedDays(from, weekEnd, settings) * unit,
+    weekUntil: addDays(weekEnd, -1),
+    fullWeek: (settings.fridayWeekend ? 4 + 3 * factor : 5 + 2 * factor) * unit,
+  };
+}
+
+// ---------- Aprender cuánto más se gasta el fin de semana ----------
+
+// Gasto del día a día acumulado en cada punto conocido de un ciclo: inicio, cada revisión y cierre
+function spendPoints(state, cyc) {
+  const ks = state.checkins.filter(k => k.cycleId === cyc.id).sort((a, b) => a.date.localeCompare(b.date));
+  const pts = [{ date: cyc.start, v: 0 }];
+  let extra = 0;
+  for (const k of ks) {
+    extra += Number(k.extraIncome) || 0;
+    const balance = k.balance - (Number(k.earlyIncome) || 0);
+    const fixedCharged = cyc.fixedTotal - (Number(k.pendingFixed) || 0);
+    pts.push({ date: k.date, v: cyc.startBalance - balance - fixedCharged - netToJars(state, cyc.id, k.date) + extra });
+  }
+  if (cyc.end) pts.push({ date: cyc.end, v: cyc.variable });
+  return pts;
+}
+
+// Entre cada par de puntos sabemos cuánto se gastó y cuántos días eran entre semana (a) y de fin de
+// semana (b). Si esos tramos mezclan días distintos (p. ej. revisar viernes y lunes) se puede separar
+// el gasto de un día entre semana (x) y de uno de fin de semana (y) con mínimos cuadrados: S ≈ a·x + b·y.
+export function learnWeekend(state) {
+  const s = state.settings;
+  const prior = Number(s.weekendFactor) || 1;
+  const cycles = [
+    ...state.history.filter(h => h.startBalance != null)
+      .map(h => ({ id: h.id, start: h.start, startBalance: h.startBalance, fixedTotal: h.fixed, end: h.end, variable: h.variable })),
+    ...(state.cycle ? [state.cycle] : []),
+  ].slice(-4);
+
+  const usualShare = s.fridayWeekend ? 3 / 7 : 2 / 7;
+  let saa = 0, sab = 0, sbb = 0, sas = 0, sbs = 0, n = 0, informative = 0;
+  for (const cyc of cycles) {
+    const pts = spendPoints(state, cyc);
+    for (let i = 1; i < pts.length; i++) {
+      const from = pts[i - 1].date, to = pts[i].date;
+      const days = diffDays(from, to);
+      if (days <= 0) continue;
+      let b = 0;
+      for (let d = from; d < to; d = addDays(d, 1)) if (isWeekend(d, s)) b++;
+      const a = days - b, S = pts[i].v - pts[i - 1].v;
+      saa += a * a; sab += a * b; sbb += b * b; sas += a * S; sbs += b * S; n++;
+      // Un tramo de semanas completas no aporta nada: tiene la misma mezcla de días que cualquier semana
+      if (Math.abs(b / days - usualShare) > 0.15) informative++;
+    }
+  }
+
+  let learned = null;
+  const det = saa * sbb - sab * sab;
+  if (n >= 3 && informative >= 2 && det > 0.05 * saa * sbb) {
+    const x = (sas * sbb - sbs * sab) / det; // € por día entre semana
+    const y = (saa * sbs - sab * sas) / det; // € por día de fin de semana
+    if (x > 0 && y >= 0) learned = Math.min(4, Math.max(0.5, y / x));
+    else if (x <= 0 && y > 0) learned = 4;
+  }
+  // Se fía más de lo aprendido cuantos más tramos útiles tenga; mientras, se mezcla con tu elección
+  const confidence = learned == null ? 0 : Math.min(1, informative / 6);
+  const factor = learned == null ? prior : confidence * learned + (1 - confidence) * prior;
+  return { factor: Math.round(factor * 10) / 10, learned, confidence, informative, prior };
+}
+
+// Ajustes con el peso del fin de semana que toca usar (el aprendido o el elegido)
+export function effectiveSettings(state) {
+  const s = state.settings;
+  return s.weekendMode === 'auto' ? { ...s, weekendFactor: learnWeekend(state).factor } : s;
+}
+
+// ---------- Aprendizaje del gasto diario ----------
 
 // Gasto diario medio "del día a día" aprendido de los últimos ciclos (los recientes pesan más)
 export function learnedDaily(history) {
@@ -123,7 +221,7 @@ export function learnedDaily(history) {
 }
 
 export function recommendation(state, analysis = null) {
-  const s = state.settings, c = state.cycle;
+  const s = effectiveSettings(state), c = state.cycle;
   const income = c ? c.income : Number(s.salary) || 0;
   const fixed = c ? c.fixedTotal : fixedTotalOf(s);
   const days = c ? cycleInfo(c, s).totalDays : 30;
@@ -144,13 +242,15 @@ export function recommendation(state, analysis = null) {
   }
   savings = savings >= 10 ? Math.floor(savings / 10) * 10 : Math.floor(savings);
   const dayToDay = Math.max(0, sobrante - savings);
-  return { income, fixed, sobrante, savings, cushion: round2(cushion), daily, source, dayToDay, perDay: dayToDay / days, days };
+  const start = c ? c.start : todayStr();
+  const plan = spendingPlan(dayToDay, start, addDays(start, days), s);
+  return { income, fixed, sobrante, savings, cushion: round2(cushion), daily, source, dayToDay, perDay: dayToDay / days, days, plan };
 }
 
 // ---------- Semáforo de una revisión ----------
 
 export function analyze(state, checkin) {
-  const c = state.cycle, s = state.settings;
+  const c = state.cycle, s = effectiveSettings(state);
   const info = cycleInfo(c, s, checkin.date);
   const elapsed = Math.max(1, info.elapsed);
   const remaining = Math.max(0, info.totalDays - elapsed);
@@ -168,12 +268,19 @@ export function analyze(state, checkin) {
   const variable = c.startBalance - balance - fixedCharged - moved + extra;
   const observedDaily = Math.max(0, variable) / elapsed;
 
+  // Los días se ponderan: un fin de semana cuenta más que un día entre semana
+  const from = addDays(c.start, elapsed);
+  const elapsedW = Math.max(1, weightedDays(c.start, from, s));
+  const remainingW = weightedDays(from, info.end, s);
+  const cycleW = Math.max(1, weightedDays(c.start, info.end, s));
+
   // Los primeros días el ritmo real es poco fiable: se mezcla con lo aprendido de meses anteriores
   const hist = learnedDaily(state.history);
   const w = hist == null ? 1 : Math.min(1, elapsed / 10);
   const daily = w * observedDaily + (1 - w) * hist;
+  const unit = w * (Math.max(0, variable) / elapsedW) + (1 - w) * (hist ?? 0) * info.totalDays / cycleW;
 
-  const projectedVariable = Math.max(0, variable) + daily * remaining;
+  const projectedVariable = Math.max(0, variable) + unit * remainingW;
   const margin = c.income + extra - c.fixedTotal; // lo que hay para el día a día + ahorro
   const goal = Number(c.savingsGoal) || 0;
   const budgetVar = margin - goal;
@@ -183,16 +290,15 @@ export function analyze(state, checkin) {
   if (projectedVariable > margin) status = 'red';
   else if (projectedVariable > budgetVar || projectedVariable > margin - tight) status = 'yellow';
 
-  const days = Math.max(1, remaining);
   return {
     status, elapsed, remaining, totalDays: info.totalDays, end: info.end,
     variable: round2(variable), observedDaily, daily, projectedVariable,
     margin, goal, saved, extra, pendingFixed,
     projectedSavings: margin - projectedVariable,
-    allowanceGoal: (budgetVar - variable) / days,       // €/día para cumplir el objetivo de ahorro
-    allowanceNoJar: (margin - variable) / days,         // €/día para no tocar las huchas
-    deficit: Math.max(0, projectedVariable - margin),   // lo que faltaría (saldría de la hucha)
-    projectedEndBalance: balance - pendingFixed - daily * remaining - Math.max(0, goal - saved),
+    planGoal: spendingPlan(budgetVar - variable, from, info.end, s), // para cumplir el objetivo de ahorro
+    planNoJar: spendingPlan(margin - variable, from, info.end, s),   // para no tocar las huchas
+    deficit: Math.max(0, projectedVariable - margin),                // lo que faltaría (saldría de la hucha)
+    projectedEndBalance: balance - pendingFixed - unit * remainingW - Math.max(0, goal - saved),
   };
 }
 
@@ -203,7 +309,7 @@ export function closeCycle(state, endDate, endBalance) {
   const moved = netToJars(state, c.id, endDate);
   const days = Math.max(1, diffDays(c.start, endDate));
   return {
-    id: c.id, start: c.start, end: endDate, days,
+    id: c.id, start: c.start, end: endDate, days, startBalance: c.startBalance,
     income: c.income + extra, fixed: c.fixedTotal, goal: Number(c.savingsGoal) || 0,
     variable: round2(Math.max(0, c.startBalance - endBalance - c.fixedTotal - moved + extra)),
     saved: round2(netToJars(state, c.id, endDate, true)), endBalance: round2(endBalance),

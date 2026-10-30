@@ -1,6 +1,7 @@
 // Service worker: guarda la app para que funcione sin conexión.
 // Sirve desde la caché al instante y, en segundo plano, descarga la versión nueva para la próxima vez.
-const CACHE = 'holgura-v1';
+// Cambia CACHE en cada publicación: así el móvil detecta la versión nueva y la app se recarga sola.
+const CACHE = 'holgura-v1.2';
 const FILES = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/calc.js', 'js/store.js',
@@ -8,7 +9,8 @@ const FILES = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
+  // cache: 'reload' evita coger copias antiguas de la caché del navegador
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {

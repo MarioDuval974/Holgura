@@ -87,8 +87,8 @@ function syncCycle(prevSalary) {
 
 const header = (title, sub = '') => `<header class="top"><h1>${title}</h1>${sub ? `<p class="sub">${sub}</p>` : ''}</header>`;
 
-const seg = (path, options, current) => `
-  <div class="seg" role="radiogroup">
+const seg = (path, options, current, cls = '') => `
+  <div class="seg ${cls}" role="radiogroup">
     ${options.map(([v, label]) => `<button role="radio" aria-checked="${String(v) === String(current)}" class="${String(v) === String(current) ? 'on' : ''}" data-act="seg" data-path="${path}" data-value="${v}">${label}</button>`).join('')}
   </div>`;
 
@@ -120,12 +120,49 @@ function statusMessage(a) {
   }
   if (a.status === 'yellow') {
     return a.goal && a.projectedVariable > a.margin - a.goal
-      ? `Si sigues así solo podrás ahorrar <b>${money(Math.max(0, a.projectedSavings))}</b> de tus ${money(a.goal)}. Para cumplir el objetivo, no pases de <b>${money(Math.max(0, a.allowanceGoal))}/día</b>.`
-      : `Vas muy justo: te sobrarían solo <b>${money(Math.max(0, a.projectedSavings))}</b>. Intenta no pasar de <b>${money(Math.max(0, a.allowanceNoJar * 0.95))}/día</b>.`;
+      ? `Si sigues así solo podrás ahorrar <b>${money(Math.max(0, a.projectedSavings))}</b> de tus ${money(a.goal)}. Para cumplir el objetivo, ajusta un poco tu gasto.`
+      : `Vas muy justo: te sobrarían solo <b>${money(Math.max(0, a.projectedSavings))}</b>. Ajusta un poco tu gasto.`;
   }
-  return a.allowanceNoJar <= 0
+  return a.planNoJar.weekday <= 0
     ? `Ya has gastado más de lo que ingresas este ciclo. Necesitarás unos <b>${money(a.deficit)}</b> de tus huchas para llegar al cobro.`
-    : `Al ritmo actual gastarás unos <b>${money(a.deficit)}</b> más de lo que ingresas. Para no tocar tus huchas, no pases de <b>${money(a.allowanceNoJar)}/día</b>.`;
+    : `Al ritmo actual gastarás unos <b>${money(a.deficit)}</b> más de lo que ingresas. Para no tocar tus huchas, ajusta tu gasto.`;
+}
+
+// Lo que puedes gastar a partir de la revisión, por día (entre semana / fin de semana) o por semana
+function allowanceBlock(a) {
+  const s = state.settings;
+  if (a.remaining <= 0) return '';
+  const useGoal = a.goal > 0 && a.planGoal.weekday > 0;
+  const plan = useGoal ? a.planGoal : a.planNoJar;
+  let body;
+  if (s.allowanceView === 'semana') {
+    body = `<div class="allow-grid">
+      <div><span>Esta semana<small>de hoy al ${dayFmt(plan.weekUntil)}</small></span><strong>${money(plan.thisWeek)}</strong></div>
+      <div><span>Semana completa<small>de lunes a domingo</small></span><strong>${money(plan.fullWeek)}</strong></div>
+    </div>`;
+  } else if (C.effectiveSettings(state).weekendFactor === 1) {
+    body = `<div class="allow-grid one"><div><span>Cada día</span><strong>${money(plan.weekday)}</strong></div></div>`;
+  } else {
+    body = `<div class="allow-grid">
+      <div><span>Entre semana<small>${s.fridayWeekend ? 'lunes a jueves' : 'lunes a viernes'}</small></span><strong>${money(plan.weekday)}<em>/día</em></strong></div>
+      <div><span>Fin de semana<small>${s.fridayWeekend ? 'viernes a domingo' : 'sábado y domingo'}</small></span><strong>${money(plan.weekend)}<em>/día</em></strong></div>
+    </div>`;
+  }
+  return `<div class="allow">
+    <div class="allow-head">
+      <div><p class="eyebrow">Puedes gastar</p><p class="allow-sub">${useGoal ? 'cumpliendo tu objetivo de ahorro' : 'sin tocar tus huchas'}</p></div>
+      ${seg('allowanceView', [['dia', 'Día'], ['semana', 'Semana']], s.allowanceView, 'mini')}
+    </div>
+    ${body}
+  </div>`;
+}
+
+// Cómo se reparte el día a día del ciclo, según cómo quieras verlo
+function planSummary(plan, perDay) {
+  const s = state.settings;
+  if (s.allowanceView === 'semana') return `≈ ${money(plan.fullWeek)} por semana`;
+  if (C.effectiveSettings(state).weekendFactor === 1) return `≈ ${money(perDay)}/día`;
+  return `≈ ${money(plan.weekday)}/día entre semana y ${money(plan.weekend)}/día el fin de semana`;
 }
 
 function statusBlock(a, k) {
@@ -137,6 +174,7 @@ function statusBlock(a, k) {
         <div><h2>${st.title}</h2><p class="muted">Revisión del ${dayFmt(k.date)} · saldo ${money(k.balance)}</p></div>
       </div>
       <p class="status-text">${statusMessage(a)}</p>
+      ${allowanceBlock(a)}
       <div class="stats">
         <div><span>Gastado en el día a día</span><strong>${money(Math.max(0, a.variable))}</strong></div>
         <div><span>Ritmo</span><strong>${money(a.daily)}/día</strong></div>
@@ -363,7 +401,7 @@ function monthCard(rec) {
       <div class="reco">
         <p class="eyebrow">Ahorro recomendado</p>
         <p class="big">${money(rec.savings)}</p>
-        <p>Te quedarían <b>${money(rec.dayToDay)}</b> para el día a día (≈ ${money(rec.perDay)}/día).</p>
+        <p>Te quedarían <b>${money(rec.dayToDay)}</b> para el día a día (${planSummary(rec.plan, rec.perDay)}).</p>
         <p class="note">${notes[rec.source]}</p>
       </div>` : ''}
       ${goalHtml}
@@ -497,15 +535,13 @@ function openCheckinResult(id) {
     ${a.elapsed < 5 && !state.history.length ? '<p class="note">Con tan pocos días la previsión es orientativa: al principio del ciclo se suele gastar más (compra grande, recibos…). Se irá afinando con cada revisión.</p>' : ''}
     <div class="rows compact">
       <div class="row"><span>Llevas</span><strong>${a.elapsed} de ${a.totalDays} días</strong></div>
-      <div class="row"><span>Para gastar sin tocar huchas</span><strong>${money(Math.max(0, a.allowanceNoJar))}/día</strong></div>
-      ${a.goal ? `<div class="row"><span>Para cumplir tu objetivo de ahorro</span><strong>${money(Math.max(0, a.allowanceGoal))}/día</strong></div>` : ''}
       ${a.pendingFixed ? `<div class="row"><span>Gastos fijos pendientes</span><strong>${money(a.pendingFixed)}</strong></div>` : ''}
     </div>
     <div class="btn-col">
       ${canWithdraw ? `<button class="btn primary block" data-act="move-new" data-type="out" data-amount="${Math.ceil(a.deficit)}">Retirar de una hucha</button>` : ''}
       <button class="btn ${canWithdraw ? 'ghost' : 'primary'} block" data-act="sheet-close">Entendido</button>
       <button class="btn text danger block" data-act="checkin-del" data-id="${k.id}">Eliminar esta revisión</button>
-    </div>`);
+    </div>`, { checkinId: id });
 }
 
 // ---------- Huchas ----------
@@ -703,6 +739,17 @@ function viewMiMes() {
     </section>
 
     <section class="card">
+      <h3>Lo que puedes gastar</h3>
+      <div class="field"><span>Quiero verlo</span>${seg('allowanceView', [['dia', 'Por día'], ['semana', 'Por semana']], s.allowanceView)}</div>
+      <div class="field"><span>¿Cuánto más gastas el fin de semana?</span>
+        ${seg('weekendMode', [['auto', 'Que lo aprenda'], ['manual', 'Lo elijo yo']], s.weekendMode)}
+      </div>
+      ${weekendSettings()}
+      <label class="check solo"><input type="checkbox" data-bind="fridayWeekend" data-kind="bool" data-rerender ${s.fridayWeekend ? 'checked' : ''}>
+        <span>El viernes cuenta como fin de semana</span></label>
+    </section>
+
+    <section class="card">
       <h3>Recomendación de ahorro</h3>
       <div class="field"><span>Margen de seguridad para imprevistos</span>
         ${seg('safetyPct', [[10, '10 %'], [15, '15 %'], [20, '20 %'], [25, '25 %']], s.safetyPct)}
@@ -726,7 +773,28 @@ function viewMiMes() {
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
     </section>
-    <p class="footer">Holgura · v1.0</p>`;
+    <p class="footer">Holgura · v1.2</p>`;
+}
+
+const fmtFactor = f => `${String(f).replace('.', ',')}×`;
+
+function weekendSettings() {
+  const s = state.settings;
+  const factors = seg('weekendFactor', [[1, 'Igual'], [1.5, '1,5×'], [2, '2×'], [3, '3×']], s.weekendFactor);
+  if (s.weekendMode !== 'auto') {
+    return `<div class="field">${factors}
+      <small>Comparado con un día entre semana. Con 2×, si entre semana te tocan 20 €/día, el fin de semana te tocarán 40 €/día. Así la previsión no se asusta el lunes tras un finde movido.</small></div>`;
+  }
+  const L = C.learnWeekend(state);
+  const info = L.learned == null
+    ? `<p><b>Aún estoy aprendiendo.</b> Mientras tanto uso <b>${fmtFactor(L.prior)}</b>: un día de fin de semana cuenta como ${String(L.prior).replace('.', ',')} días entre semana.</p>
+       <p class="note">Para aprenderlo necesito revisiones en días distintos de la semana: por ejemplo, revisar <b>cada 3 o 4 días</b>, o hacer alguna revisión suelta un viernes y un lunes. Si siempre revisas el mismo día, todas las semanas se parecen y no puedo separar el fin de semana del resto.</p>`
+    : `<p>Según tus revisiones, un día de fin de semana gastas <b>${fmtFactor(Math.round(L.learned * 10) / 10)}</b> lo de un día entre semana.</p>
+       <p class="note">${L.confidence < 1
+        ? `Aún tengo pocos datos (${L.informative} de 6 tramos útiles), así que lo mezclo con tu punto de partida: ahora uso <b>${fmtFactor(L.factor)}</b>.`
+        : `Ya tengo datos suficientes: uso <b>${fmtFactor(L.factor)}</b> y lo seguiré ajustando con cada revisión.`}</p>`;
+  return `<div class="learn">${info}</div>
+    <div class="field"><span>Punto de partida mientras aprendo</span>${factors}</div>`;
 }
 
 // ---------- Archivos (copia de seguridad y calendario) ----------
@@ -803,10 +871,11 @@ const actions = {
       return openMoveForm({ type: value, jarId: $('#mv-jar').value, amount: parseMoney($('#mv-amount').value) || '', carry: sheetCtx?.carry });
     }
     const prevSalary = state.settings.salary;
-    setPath(state.settings, path, /^\d+$/.test(value) ? Number(value) : value);
+    setPath(state.settings, path, /^\d+(\.\d+)?$/.test(value) ? Number(value) : value);
     if (path === 'cycleType') wizDraft.start = null;
     syncCycle(prevSalary);
     commit();
+    if (sheetCtx?.checkinId) openCheckinResult(sheetCtx.checkinId); // cambio Día/Semana dentro del resultado
   },
 
   'fixed-add': () => {
@@ -898,6 +967,7 @@ document.addEventListener('change', e => {
     let v = el.value;
     if (kind === 'money') v = Math.max(0, parseMoney(v) || 0);
     if (kind === 'int') v = Math.max(1, parseInt(v, 10) || 1);
+    if (kind === 'bool') v = el.checked;
     if (el.dataset.bind === 'payDay') v = Math.min(31, v);
     const prevSalary = state.settings.salary;
     setPath(state.settings, el.dataset.bind, v);
@@ -954,5 +1024,11 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && !s
 render();
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  // Cuando llega una versión nueva se recarga sola, salvo que estés escribiendo algo
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    const busy = sheetRoot.innerHTML || ['INPUT', 'SELECT'].includes(document.activeElement?.tagName);
+    if (hadController && !busy) location.reload();
+  });
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }

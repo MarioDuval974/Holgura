@@ -18,6 +18,10 @@ export function defaultState() {
       checkFreq: { type: 'semanal', every: 3, weekday: 0, monthDay: 1 },
       reminderTime: '21:00',
       safetyPct: 15,
+      allowanceView: 'dia',     // ver lo que puedes gastar 'dia' | 'semana'
+      weekendMode: 'auto',      // 'auto' (lo aprende de las revisiones) | 'manual'
+      weekendFactor: 2,         // un día de fin de semana gasta como N días entre semana (en auto, punto de partida)
+      fridayWeekend: false,
     },
     cycle: null,                // { id, start, startBalance, income, fixedTotal, fixedItems, savingsGoal }
     checkins: [],               // { id, cycleId, date, balance, pendingFixed, pendingIds, extraIncome }
