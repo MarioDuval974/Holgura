@@ -965,7 +965,7 @@ function viewMiMes() {
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
     </section>
-    <p class="footer">Holgura · v2.3</p>`;
+    <p class="footer">Holgura · v2.4</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -1192,7 +1192,7 @@ function openTxDetail(i) {
       ${row('Ordenante o beneficiario', t.counterparty)}
       ${row('Código de operación', t.code)}
       ${row('Nota del banco', t.note)}
-      ${row('Referencia', t.reference)}
+      ${row('Referencia', t.reference || t.id)}
       ${row('Código de comercio (MCC)', t.mcc)}
       ${row('Cuenta de contrapartida', t.counterAccount ? 'Sí' : 'No')}
       ${row('Estado', t.pending ? 'Pendiente' : 'Contabilizado')}

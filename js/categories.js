@@ -65,10 +65,17 @@ const DEFAULT_RULES = [
 const COMPANY = /\b(S\.?\s?L\.?U?|S\.?\s?A\.?U?|S\.?\s?COOP|SPAIN|ESPA[ÑN]A|BANCO|BANK|LTD|GMBH|INC|SAS|SRL|SOCIEDAD|AYUNTAMIENTO|AJUNTAMENT|TESORERIA|AGENCIA)\b/;
 
 // Un Bizum por la conexión del banco trae como descripción el concepto que escribe la otra persona.
-// Se reconoce por: la palabra BIZUM en cualquier campo, o una transferencia de/hacia una persona sin comercio de tarjeta.
-export function looksLikeBizum(tx) {
+// Se reconoce por: la palabra BIZUM en cualquier campo; el nombre de la persona enmascarado ("Daniel ***");
+// la referencia de Bizum (un número de 30 cifras o más); o una transferencia de/hacia una persona sin comercio de tarjeta.
+// Señales seguras: la palabra BIZUM, el nombre enmascarado o la referencia larga
+export function surelyBizum(tx) {
   const all = `${tx.description || ''} ${tx.counterparty || ''} ${tx.code || ''} ${tx.note || ''} ${tx.reference || ''}`.toUpperCase();
-  if (/BIZUM/.test(all)) return true;
+  return /BIZUM/.test(all) || /\*{3}/.test(tx.counterparty || '')
+    || [tx.reference, tx.id].some(r => /^\d{30,}$/.test(String(r || '').replace(/\s/g, '')));
+}
+
+export function looksLikeBizum(tx) {
+  if (surelyBizum(tx)) return true;
   const name = (tx.counterparty || '').toUpperCase();
   const card = /TARJ|CARD|POS\b|CCRD|COMPRA/.test(`${tx.code || ''}`.toUpperCase());
   return Boolean(name) && !COMPANY.test(name) && !tx.mcc && !card && (tx.counterAccount || /TRANSF|TRF|ICDT|RCDT|PMNT/.test(`${tx.code || ''}`.toUpperCase()));
@@ -77,6 +84,8 @@ export function looksLikeBizum(tx) {
 export function categorize(tx, rules = []) {
   const text = `${tx.description || ''} ${tx.counterparty || ''} ${tx.code || ''} ${tx.note || ''}`.toUpperCase();
   const abs = Math.round(Math.abs(Number(tx.amount) || 0) * 100) / 100;
+  // Un Bizum seguro va primero: así su concepto ("Berlin", "cena"…) no se confunde con un comercio de tus reglas
+  if (surelyBizum(tx)) return { category: 'Bizum', label: tx.amount > 0 ? 'Bizum recibido' : 'Bizum enviado', fixed: false };
   for (const r of rules) {
     try {
       if (new RegExp(r.match, 'i').test(text) && (r.amount == null || Math.abs(r.amount - abs) < 0.005) && (r.min == null || abs >= r.min)) {
