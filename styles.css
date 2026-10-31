@@ -252,6 +252,10 @@ input[type="date"], input[type="time"] { min-height: 48px; }
 .checks { display: grid; gap: 6px; }
 .check { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--field); border-radius: 12px; cursor: pointer; }
 .check.solo { margin: 12px 0 0; }
+.check.auto { cursor: default; }
+.check.auto span small { display: block; margin: 0; font-size: 12px; }
+.auto-mark { width: 22px; height: 22px; flex: none !important; border-radius: 6px; border: 2px solid var(--line); display: grid; place-items: center; font-size: 14px; font-weight: 700; color: #fff; }
+.auto-mark.on { background: var(--brand); border-color: var(--brand); }
 .check input { width: 22px; height: 22px; padding: 0; flex: none; accent-color: var(--brand); -webkit-appearance: checkbox; appearance: auto; }
 .check span { flex: 1; }
 .check em { font-style: normal; color: var(--muted); font-size: 14px; white-space: nowrap; }

@@ -149,7 +149,7 @@ function livePlan(useGoal) {
   // Sin redondear a 0 por día: un Bizum devuelto un día sin gasto también resta de la semana
   const net = d => (sp.byDay[d] || 0) - (back[d] || 0);
   const spentBetween = (from, to) => { let t = 0; for (let d = from; d < to; d = C.addDays(d, 1)) t += net(d); return t; };
-  const available = c.income - c.fixedTotal - (useGoal ? Number(c.savingsGoal) || 0 : 0);
+  const available = c.income - C.cycleFixedTotal(state) - (useGoal ? Number(c.savingsGoal) || 0 : 0);
 
   const day = C.spendingPlan(available - spentBetween(c.start, today), today, end, s);
   const monday = C.addDays(today, -((C.weekday(today) + 6) % 7));
@@ -604,6 +604,7 @@ function viewRevisar() {
   const next = nextDue();
   const pend = pendingDefaults();
   const last = lastBalance();
+  const tracked = C.trackedFixed(state);
   const [y, m, d] = today.split('-').map(Number);
   const showEarly = s.cycleType === 'natural' && d >= Math.min(s.payDay, 28) - 4;
 
@@ -616,7 +617,10 @@ function viewRevisar() {
     ${pend.mode === 'items' ? `
       <div class="field"><span>Gastos fijos que <b>ya</b> te han cobrado</span>
         <small class="hint">Marca cada uno cuando veas el cargo en tu banco. <b id="ck-charged">${chargedText(c.fixedItems.filter(i => !pend.ids.includes(i.id)))}</b></small>
-        <div class="checks">${c.fixedItems.map(i => `
+        <div class="checks">${c.fixedItems.map(i => tracked?.ids.has(i.id) ? `
+          <div class="check auto"><span class="auto-mark ${tracked.byId[i.id] ? 'on' : ''}">${tracked.byId[i.id] ? '✓' : ''}</span>
+            <span>${esc(i.name || 'Sin nombre')}<small>Según tu banco</small></span>
+            <em>${tracked.byId[i.id] ? `${money(tracked.byId[i.id])} de ${money(i.amount)}` : `0 € de ${money(i.amount)}`}</em></div>` : `
           <label class="check"><input type="checkbox" data-fixed-id="${i.id}" ${pend.ids.includes(i.id) ? '' : 'checked'}>
             <span>${esc(i.name || 'Sin nombre')}</span><em>${money(i.amount)}${i.day ? ` · día ${i.day}` : ''}</em></label>`).join('')}
         </div>
@@ -682,9 +686,11 @@ function setLastBalance(amount, source, at = new Date().toISOString()) {
   persist();
 }
 
-function chargedText(charged) {
-  const c = state.cycle;
-  return `Cobrados: ${money(sum(charged, i => i.amount))} de ${money(c.fixedTotal)}.`;
+// Cobrados hasta ahora: los marcados a mano + lo retirado de verdad para los fijos "según banco"
+function chargedText(marked) {
+  const tracked = C.trackedFixed(state);
+  const manual = sum(marked.filter(i => !tracked?.ids.has(i.id)), i => i.amount);
+  return `Cobrados: ${money(manual + (tracked?.charged || 0))} de ${money(C.cycleFixedTotal(state))}.`;
 }
 
 function saveCheckin() {
@@ -696,6 +702,9 @@ function saveCheckin() {
   if (c.fixedItems.length) {
     // Marcado = ya cobrado; los que quedan sin marcar son los pendientes
     pendingIds = [...document.querySelectorAll('[data-fixed-id]')].filter(el => !el.checked).map(el => el.dataset.fixedId);
+    // Los "según banco" se guardan como pendientes: si algún día no hay datos del banco, no cuentan como gastados
+    const tracked = C.trackedFixed(state);
+    if (tracked) pendingIds.push(...tracked.ids);
     pendingFixed = sum(c.fixedItems.filter(i => pendingIds.includes(i.id)), i => i.amount);
   } else if ($('#ck-pending')) {
     pendingFixed = Math.min(c.fixedTotal, Math.max(0, parseMoney($('#ck-pending').value) || 0));
@@ -966,7 +975,7 @@ function viewMiMes() {
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
     </section>
-    <p class="footer">Holgura · v2.6</p>`;
+    <p class="footer">Holgura · v2.7</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -974,7 +983,7 @@ function viewMiMes() {
 // Lo que hay para el día a día en este ciclo: nómina − fijos − objetivo de ahorro
 const dayToDayAvailable = () => {
   const c = state.cycle;
-  return c ? c.income - c.fixedTotal - (Number(c.savingsGoal) || 0) : 0;
+  return c ? c.income - C.cycleFixedTotal(state) - (Number(c.savingsGoal) || 0) : 0;
 };
 const budgetTotal = () => sum(budgetCategories(), c => (state.settings.budgets || {})[c] || 0);
 
@@ -1469,9 +1478,12 @@ const actions = {
       const b = await B.balance();
       $('#ck-balance').value = inputNum(b.amount);
       setLastBalance(b.amount, 'bank');
+      // De paso se leen los movimientos, para que los fijos "según banco" (psicóloga, madre…) estén al día
+      await refreshSpend({ silent: true });
+      if (tab === 'revisar') render();
       const note = $('#bk-note');
       if (note) note.textContent = `${balanceNote(state.lastBalance)} Puedes corregirlo antes de guardar.`;
-      toast('Saldo traído del banco');
+      toast('Saldo y movimientos traídos del banco');
     } catch (err) {
       bankError(err);
     } finally {
@@ -1599,7 +1611,7 @@ if (B.getConfig().password) loadBankStatus();
 // como mucho cada hora para no pedir datos al banco a cada momento
 const spendAge = state.bankSpend ? Date.now() - new Date(state.bankSpend.at) : Infinity;
 if (state.setup && B.isReady()
-    && (state.bankSpend?.cycleId !== state.cycle?.id || !state.bankSpend?.byDay || spendAge > 3600 * 1000)) {
+    && (state.bankSpend?.cycleId !== state.cycle?.id || !state.bankSpend?.fixedCharges || spendAge > 3600 * 1000)) {
   refreshSpend({ silent: true });
 }
 

@@ -90,7 +90,10 @@ export function categorize(tx, rules = []) {
   for (const r of rules) {
     try {
       if (new RegExp(r.match, 'i').test(text) && (r.amount == null || Math.abs(r.amount - abs) < 0.005) && (r.min == null || abs >= r.min)) {
-        return { category: r.category, label: r.label || null, fixed: Boolean(r.fixed) || FIXED_CATEGORIES.includes(r.category) };
+        return {
+          category: r.category, label: r.label || null, fixed: Boolean(r.fixed) || FIXED_CATEGORIES.includes(r.category),
+          charge: r.charge || null, // a qué gastos fijos "según banco" corresponde (p. ej. 80 € → psicóloga 60 + peluquería 20)
+        };
       }
     } catch { /* regla mal escrita: se ignora */ }
   }
@@ -102,12 +105,30 @@ export function categorize(tx, rules = []) {
 
 // Lo gastado en el día a día por categoría y lo que te han devuelto por Bizum.
 // Las devoluciones (p. ej. el descuento de Waylet) restan de su propia categoría.
+// Reparte un cargo entre gastos fijos: { psicologa: 60, peluqueria: 20 }, '*' = todo el importe, 'rest' = lo que sobre
+export function splitCharge(charge, abs) {
+  const out = {};
+  let used = 0;
+  for (const [k, v] of Object.entries(charge)) if (typeof v === 'number') { out[k] = v; used += v; }
+  for (const [k, v] of Object.entries(charge)) {
+    if (v === '*') out[k] = abs;
+    else if (v === 'rest') out[k] = Math.max(0, Math.round((abs - used) * 100) / 100);
+  }
+  return out;
+}
+
 export function spendByCategory(list) {
   const byCat = {}, byDay = {}, bizumByDay = {};
+  const fixedCharges = []; // lo que ha salido para gastos fijos "según banco" { date, key, amount }
   const add = (obj, key, v) => { obj[key] = Math.round(((obj[key] || 0) + v) * 100) / 100; };
   let bizumIn = 0;
   for (const t of list) {
-    if (t.fixed) continue;
+    if (t.fixed) {
+      if (t.charge && t.amount < 0) {
+        for (const [key, amount] of Object.entries(splitCharge(t.charge, -t.amount))) fixedCharges.push({ date: t.date, key, amount });
+      }
+      continue;
+    }
     if (t.category === 'Bizum' && t.amount > 0) {
       bizumIn += t.amount;
       if (t.date) add(bizumByDay, t.date, t.amount);
@@ -117,5 +138,5 @@ export function spendByCategory(list) {
     add(byCat, t.category, -t.amount);
     if (t.date) add(byDay, t.date, -t.amount); // gasto del día a día por fecha
   }
-  return { byCat, byDay, bizumByDay, bizumIn: Math.round(bizumIn * 100) / 100 };
+  return { byCat, byDay, bizumByDay, fixedCharges, bizumIn: Math.round(bizumIn * 100) / 100 };
 }
