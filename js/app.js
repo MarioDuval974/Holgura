@@ -975,7 +975,7 @@ function viewMiMes() {
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
     </section>
-    <p class="footer">Holgura · v2.7</p>`;
+    <p class="footer">Holgura · v2.8</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------

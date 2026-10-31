@@ -99,7 +99,12 @@ export function categorize(tx, rules = []) {
   }
   // Antes que las reglas por palabras: el concepto de un Bizum ("cena en el bar") no debe confundirse con un comercio
   if (looksLikeBizum(tx)) return { category: 'Bizum', label: tx.amount > 0 ? 'Bizum recibido' : 'Bizum enviado', fixed: false };
-  for (const [category, re] of DEFAULT_RULES) if (re.test(text)) return { category, label: null, fixed: FIXED_CATEGORIES.includes(category) };
+  for (const [category, re] of DEFAULT_RULES) {
+    if (!re.test(text)) continue;
+    // Dinero que entra con nombre de suscripción ("Netflix y Spotify") es alguien pagándote su parte, no un cargo
+    if (category === 'Suscripciones' && tx.amount > 0) return { category: 'Bizum', label: 'Bizum recibido (suscripción compartida)', fixed: false };
+    return { category, label: null, fixed: FIXED_CATEGORIES.includes(category) };
+  }
   return { category: 'Otros', label: null, fixed: false };
 }
 
