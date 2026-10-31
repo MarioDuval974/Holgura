@@ -146,7 +146,7 @@ function livePlan(useGoal) {
   if (today < c.start || today >= end) return null;
 
   const back = s.bizumTo ? sp.bizumByDay || {} : {}; // Bizum devueltos que compensan gasto
-  const net = d => (sp.byDay[d] || 0) - (back[d] || 0);
+  const net = d => Math.max(0, (sp.byDay[d] || 0) - (back[d] || 0));
   const spentBetween = (from, to) => { let t = 0; for (let d = from; d < to; d = C.addDays(d, 1)) t += net(d); return t; };
   const available = c.income - c.fixedTotal - (useGoal ? Number(c.savingsGoal) || 0 : 0);
 
@@ -965,7 +965,7 @@ function viewMiMes() {
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
     </section>
-    <p class="footer">Holgura · v2.1</p>`;
+    <p class="footer">Holgura · v2.2</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -1006,10 +1006,11 @@ function budgetSection() {
 }
 
 // Gastado en una categoría: si es la elegida para los Bizum, se descuenta lo que te han devuelto
+// Nunca por debajo de 0: una devolución de algo pagado en el ciclo anterior no "regala" presupuesto en este
 function netSpent(cat, sp) {
-  const gross = sp?.byCat[cat] || 0;
+  const gross = Math.max(0, sp?.byCat[cat] || 0);
   const back = sp && cat === state.settings.bizumTo ? sp.bizumIn || 0 : 0;
-  return { gross, back, net: Math.round((gross - back) * 100) / 100 };
+  return { gross, back: Math.min(back, gross), net: Math.max(0, Math.round((gross - back) * 100) / 100) };
 }
 
 function budgetStatus(spent, budget, elapsedFrac) {
