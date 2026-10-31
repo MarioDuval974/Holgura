@@ -1,8 +1,10 @@
 // Interfaz de Holgura: vistas, hojas (bottom sheets) y acciones.
 import * as C from './calc.js';
 import * as S from './store.js';
+import * as B from './bank.js';
 
 let state = S.load();
+let bankUI = { status: null, loading: false, error: null }; // estado de la conexión con el banco
 let tab = 'inicio';
 let wizStep = 0;
 let wizDraft = { start: null, balance: '' };
@@ -461,7 +463,8 @@ function viewRevisar() {
 
   html += `<section class="card">
     <h3>Nueva revisión</h3>
-    ${moneyField('Saldo actual de tu cuenta', 'id="ck-balance"', '', 'El que ves ahora mismo en la app de tu banco.')}
+    ${moneyField('Saldo actual de tu cuenta', 'id="ck-balance"', '', B.isReady() ? '<span id="bk-note">Escríbelo o tráelo de tu banco.</span>' : 'El que ves ahora mismo en la app de tu banco.')}
+    ${B.isReady() ? '<button class="btn ghost block bank-btn" data-act="bank-balance">🏦 Traer saldo del banco</button>' : ''}
     ${pend.mode === 'items' ? `
       <div class="field"><span>Gastos fijos que <b>aún no</b> te han cobrado</span>
         <div class="checks">${c.fixedItems.map(i => `
@@ -488,6 +491,14 @@ function viewRevisar() {
           <span class="muted">${money(k.balance)}</span><span class="chev">›</span></button>`;
       }).join('')}
     </div></section>`;
+  }
+
+  if (B.isReady()) {
+    html += `<section class="card">
+      <h3>Movimientos del ciclo</h3>
+      <p class="muted">Lo que ha entrado y salido de tu cuenta desde el ${dateFmt(c.start)}, leído de tu banco.</p>
+      <button class="btn ghost block" data-act="bank-tx">Ver movimientos</button>
+    </section>`;
   }
 
   html += `<section class="card">
@@ -764,6 +775,8 @@ function viewMiMes() {
       <button class="btn ghost block" data-act="cobro-open">${s.cycleType === 'natural' ? 'Empezar nuevo mes' : 'He cobrado: empezar nuevo ciclo'}</button>
     </section>
 
+    ${bankSection()}
+
     <section class="card">
       <h3>Tus datos</h3>
       <p class="muted">Todo se guarda solo en este móvil. Haz una copia de vez en cuando por si cambias de móvil o borras la app.</p>
@@ -773,7 +786,133 @@ function viewMiMes() {
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
     </section>
-    <p class="footer">Holgura · v1.2</p>`;
+    <p class="footer">Holgura · v1.3</p>`;
+}
+
+// ---------- Conexión con el banco ----------
+
+function bankSection() {
+  const cfg = B.getConfig(), st = bankUI.status;
+  let body;
+  if (!cfg.password) {
+    body = `<p class="muted">Opcional: conecta tu cuenta para traer el saldo y ver tus movimientos sin escribirlos. Es <b>solo lectura</b>: nadie puede mover dinero. Siempre podrás seguir escribiendo el saldo a mano.</p>
+      <label class="field"><span>Contraseña del servidor</span>
+        <input type="password" id="bk-pass" autocomplete="current-password" placeholder="La que pusiste en Vercel"></label>
+      <button class="btn primary block" data-act="bank-save-pass">Guardar</button>`;
+  } else if (bankUI.loading && !st) {
+    body = '<p class="muted">Comprobando la conexión…</p>';
+  } else if (bankUI.error) {
+    body = `<p class="warn">${esc(bankUI.error)}</p>
+      <div class="btn-row"><button class="btn ghost" data-act="bank-refresh">Reintentar</button>
+      <button class="btn text" data-act="bank-forget">Cambiar contraseña</button></div>`;
+  } else if (!st) {
+    body = '<p class="muted">Comprobando la conexión…</p>';
+  } else if (!st.connected) {
+    body = `${st.status && st.status !== 'AUTHORIZED' ? '<p class="warn">El permiso del banco ha caducado o se ha cancelado. Vuelve a conectar.</p>' : ''}
+      <p class="muted">Te llevaré a CaixaBank para que autorices el acceso de solo lectura (con la app de CaixaBank). Al terminar, vuelve a Holgura.</p>
+      <button class="btn primary block" data-act="bank-connect">🏦 Conectar con mi banco</button>
+      <button class="btn text block" data-act="bank-forget">Olvidar contraseña de este móvil</button>`;
+  } else {
+    const until = st.validUntil ? st.validUntil.slice(0, 10) : null;
+    const days = until ? C.diffDays(C.todayStr(), until) : null;
+    body = `<div class="learn">
+        <p>✅ Conectado a <b>${esc(st.bank)}</b></p>
+        ${until ? `<p class="note">Permiso válido hasta el ${dateFmt(until, { day: 'numeric', month: 'long', year: 'numeric' })} (${days} días). Te avisaré para renovarlo.</p>` : ''}
+      </div>
+      ${st.accounts.length > 1 ? `<label class="field"><span>Cuenta de la nómina</span><select id="bk-account">
+          <option value="">Elige una cuenta…</option>
+          ${st.accounts.map(a => `<option value="${esc(a.uid)}" ${a.uid === cfg.account ? 'selected' : ''}>${esc(a.name)} ${esc(a.iban)}</option>`).join('')}
+        </select></label>` : st.accounts.map(a => `<p class="muted">🏦 ${esc(a.name)} ${esc(a.iban)}</p>`).join('')}
+      <div class="btn-row">
+        <button class="btn ghost" data-act="bank-connect">Renovar permiso</button>
+        <button class="btn text danger" data-act="bank-disconnect">Desconectar</button>
+      </div>`;
+  }
+  return `<section class="card"><h3>Conexión con el banco</h3>${body}</section>`;
+}
+
+const rerenderIf = t => { if (state.setup && tab === t && !sheetRoot.innerHTML) render(); };
+
+async function loadBankStatus() {
+  if (!B.getConfig().password || bankUI.loading) return;
+  bankUI.loading = true;
+  bankUI.error = null;
+  try {
+    const st = await B.status();
+    bankUI.status = st;
+    const cfg = B.getConfig();
+    if (st.connected && !st.accounts.some(a => a.uid === cfg.account)) {
+      B.saveConfig({ account: st.accounts.length === 1 ? st.accounts[0].uid : null });
+    }
+  } catch (err) {
+    if (err.code === 'bad_password') { B.saveConfig({ password: null }); toast('La contraseña del servidor no es correcta'); }
+    else bankUI.error = err.message;
+  } finally {
+    bankUI.loading = false;
+    rerenderIf('mimes');
+    rerenderIf('revisar');
+  }
+}
+
+function bankError(err) {
+  if (err.code === 'expired' || err.code === 'not_connected') {
+    bankUI.status = null;
+    toast('La conexión con el banco ha caducado: renuévala en Mi mes');
+  } else if (err.code === 'bad_password') {
+    B.saveConfig({ password: null });
+    toast('La contraseña del servidor no es correcta');
+  } else {
+    toast(err.message);
+  }
+}
+
+async function startBankConnect(bank) {
+  try {
+    if (!bank) {
+      const { banks } = await B.banks();
+      if (!banks.length) throw new Error('No encuentro CaixaBank ni imagin en Enable Banking');
+      if (banks.length > 1) {
+        return openSheet('¿Con qué banco conectas?', `
+          <p class="muted">Elige el mismo que vinculaste en Enable Banking.</p>
+          <div class="btn-col">${banks.map(b => `<button class="btn ghost block" data-act="bank-pick" data-name="${esc(b.name)}">${esc(b.name)}</button>`).join('')}</div>`);
+      }
+      bank = banks[0].name;
+    }
+    B.saveConfig({ bank });
+    toast('Abriendo tu banco…');
+    const { url } = await B.connect(bank);
+    location.href = url;
+  } catch (err) {
+    bankError(err);
+  }
+}
+
+async function openTransactions() {
+  const c = state.cycle;
+  openSheet('Movimientos', '<p class="muted center">Leyendo tus movimientos del banco…</p>');
+  try {
+    const { transactions: list } = await B.transactions(c.start);
+    const income = sum(list.filter(t => t.amount > 0), t => t.amount);
+    const spent = -sum(list.filter(t => t.amount < 0), t => t.amount);
+    const days = [...new Set(list.map(t => t.date))];
+    openSheet('Movimientos', `
+      <p class="muted center">Desde el ${dayFmt(c.start)} · ${list.length} movimientos</p>
+      <div class="stats two">
+        <div><span>Entradas</span><strong class="pos">+ ${money(income)}</strong></div>
+        <div><span>Salidas</span><strong class="neg">− ${money(spent)}</strong></div>
+      </div>
+      ${list.length ? days.map(d => `
+        <h3>${d ? dayFmt(d) : 'Sin fecha'}</h3>
+        <div class="list">${list.filter(t => t.date === d).map(t => `
+          <div class="list-row static">
+            <span class="mv ${t.amount >= 0 ? 'in' : 'out'}">${t.amount >= 0 ? '＋' : '−'}</span>
+            <span class="grow tx-desc">${esc(t.description)}${t.pending ? '<small>Pendiente</small>' : t.counterparty && t.counterparty !== t.description ? `<small>${esc(t.counterparty)}</small>` : ''}</span>
+            <strong class="${t.amount < 0 ? 'neg' : 'pos'}">${t.amount < 0 ? '− ' : '+ '}${money(Math.abs(t.amount))}</strong>
+          </div>`).join('')}</div>`).join('') : '<p class="muted center">No hay movimientos en este ciclo.</p>'}`);
+  } catch (err) {
+    closeSheet();
+    bankError(err);
+  }
 }
 
 const fmtFactor = f => `${String(f).replace('.', ',')}×`;
@@ -860,7 +999,10 @@ function closeSheet() {
 // ---------- Acciones ----------
 
 const actions = {
-  tab: el => { closeSheet(); tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
+  tab: el => {
+    closeSheet(); tab = el.dataset.tab; render(); window.scrollTo(0, 0);
+    if (tab === 'mimes') loadBankStatus();
+  },
   'go-revisar': () => { tab = 'revisar'; render(); window.scrollTo(0, 0); },
   'wiz-next': wizNext,
   'wiz-back': () => { wizStep = Math.max(0, wizStep - 1); render(); },
@@ -950,6 +1092,47 @@ const actions = {
     render();
   },
   'sheet-close': closeSheet,
+
+  'bank-save-pass': () => {
+    const pw = $('#bk-pass').value.trim();
+    if (pw.length < 8) return toast('La contraseña tiene al menos 8 caracteres');
+    B.saveConfig({ password: pw });
+    bankUI = { status: null, loading: false, error: null };
+    render();
+    loadBankStatus();
+  },
+  'bank-refresh': () => { bankUI.error = null; render(); loadBankStatus(); },
+  'bank-forget': () => { B.clearConfig(); bankUI = { status: null, loading: false, error: null }; render(); },
+  'bank-connect': () => startBankConnect(B.getConfig().bank),
+  'bank-pick': el => { closeSheet(); startBankConnect(el.dataset.name); },
+  'bank-disconnect': async () => {
+    if (!confirm('¿Desconectar tu banco? Holgura dejará de poder leer tu saldo y tus movimientos.')) return;
+    try {
+      await B.disconnect();
+      B.saveConfig({ account: null });
+      bankUI.status = null;
+      toast('Banco desconectado');
+      loadBankStatus();
+    } catch (err) { bankError(err); }
+  },
+  'bank-balance': async el => {
+    el.disabled = true;
+    el.textContent = 'Consultando tu banco…';
+    try {
+      const b = await B.balance();
+      $('#ck-balance').value = String(Math.round(b.amount * 100) / 100).replace('.', ',');
+      const at = new Date(b.at);
+      const note = $('#bk-note');
+      if (note) note.textContent = `Saldo disponible según tu banco${isNaN(at) ? '' : ` (${at.toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })})`}. Puedes corregirlo antes de guardar.`;
+      toast('Saldo traído del banco');
+    } catch (err) {
+      bankError(err);
+    } finally {
+      el.disabled = false;
+      el.textContent = '🏦 Traer saldo del banco';
+    }
+  },
+  'bank-tx': openTransactions,
 };
 
 document.addEventListener('click', e => {
@@ -988,6 +1171,9 @@ document.addEventListener('change', e => {
     if (el.dataset.cbind === 'start' && el.value) state.cycle.start = el.value;
     if (el.dataset.cbind === 'startBalance') { const v = parseMoney(el.value); if (Number.isFinite(v)) state.cycle.startBalance = v; }
     persist();
+  } else if (el.id === 'bk-account') {
+    B.saveConfig({ account: el.value || null });
+    toast(el.value ? 'Cuenta elegida' : 'Elige una cuenta para traer el saldo');
   } else if (el.id === 'import-file' && el.files[0]) {
     el.files[0].text().then(text => {
       try {
@@ -1019,9 +1205,15 @@ function render() {
 }
 
 // Al volver a la app (puede haber cambiado el día) se recalcula todo
-document.addEventListener('visibilitychange', () => { if (!document.hidden && !sheetRoot.innerHTML) render(); });
+// Al volver del banco también se comprueba si la conexión ya está hecha
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if (!sheetRoot.innerHTML) render();
+  if (tab === 'mimes' || (B.getConfig().password && !B.isReady())) loadBankStatus();
+});
 
 render();
+if (B.getConfig().password) loadBankStatus();
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   // Cuando llega una versión nueva se recarga sola, salvo que estés escribiendo algo

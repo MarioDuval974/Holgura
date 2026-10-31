@@ -4,5 +4,10 @@
 # Copias de seguridad exportadas desde la app: contienen tus datos, nunca se suben
 holgura-copia-*.json
 
+# Claves privadas (p. ej. la de Enable Banking): jamás deben acabar en GitHub
+*.pem
+*.key
+.env*
+
 Thumbs.db
 desktop.ini

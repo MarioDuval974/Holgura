@@ -141,6 +141,13 @@ header.top .sub { color: var(--muted); margin: 4px 0 0; font-size: 15px; }
 .allow-grid strong { display: block; font-size: 22px; letter-spacing: -.01em; margin-top: 6px; font-variant-numeric: tabular-nums; }
 .allow-grid strong em { font-style: normal; font-size: 13px; font-weight: 500; color: var(--muted); margin-left: 2px; }
 
+.pos { color: var(--green); }
+.stats.two { grid-template-columns: 1fr 1fr; margin-bottom: 4px; }
+.stats.two div { background: var(--card); }
+.bank-btn { margin-top: -4px; }
+.tx-desc { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 15px; }
+.tx-desc small { display: block; }
+
 .learn { background: var(--brand-soft); border-radius: 12px; padding: 12px; margin: 4px 0 8px; }
 .learn p { margin: 0 0 4px; }
 
