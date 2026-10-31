@@ -576,9 +576,10 @@ function viewRevisar() {
     ${moneyField('Saldo actual de tu cuenta', 'id="ck-balance"', '', B.isReady() ? '<span id="bk-note">Escríbelo o tráelo de tu banco.</span>' : 'El que ves ahora mismo en la app de tu banco.')}
     ${B.isReady() ? '<button class="btn ghost block bank-btn" data-act="bank-balance">🏦 Traer saldo del banco</button>' : ''}
     ${pend.mode === 'items' ? `
-      <div class="field"><span>Gastos fijos que <b>aún no</b> te han cobrado</span>
+      <div class="field"><span>Gastos fijos que <b>ya</b> te han cobrado</span>
+        <small class="hint">Marca cada uno cuando veas el cargo en tu banco. <b id="ck-charged">${chargedText(c.fixedItems.filter(i => !pend.ids.includes(i.id)))}</b></small>
         <div class="checks">${c.fixedItems.map(i => `
-          <label class="check"><input type="checkbox" data-fixed-id="${i.id}" ${pend.ids.includes(i.id) ? 'checked' : ''}>
+          <label class="check"><input type="checkbox" data-fixed-id="${i.id}" ${pend.ids.includes(i.id) ? '' : 'checked'}>
             <span>${esc(i.name || 'Sin nombre')}</span><em>${money(i.amount)}${i.day ? ` · día ${i.day}` : ''}</em></label>`).join('')}
         </div>
       </div>` : c.fixedTotal > 0 ? moneyField('Gastos fijos que aún no te han cobrado', 'id="ck-pending"', numStr(pend.amount), `De tus ${money(c.fixedTotal)} de gastos fijos.`) : ''}
@@ -622,6 +623,11 @@ function viewRevisar() {
   return html;
 }
 
+function chargedText(charged) {
+  const c = state.cycle;
+  return `Cobrados: ${money(sum(charged, i => i.amount))} de ${money(c.fixedTotal)}.`;
+}
+
 function saveCheckin() {
   const c = state.cycle, today = C.todayStr();
   const balance = parseMoney($('#ck-balance').value);
@@ -629,7 +635,8 @@ function saveCheckin() {
   const date = $('#ck-date').value || today;
   let pendingFixed = 0, pendingIds = [];
   if (c.fixedItems.length) {
-    pendingIds = [...document.querySelectorAll('[data-fixed-id]')].filter(el => el.checked).map(el => el.dataset.fixedId);
+    // Marcado = ya cobrado; los que quedan sin marcar son los pendientes
+    pendingIds = [...document.querySelectorAll('[data-fixed-id]')].filter(el => !el.checked).map(el => el.dataset.fixedId);
     pendingFixed = sum(c.fixedItems.filter(i => pendingIds.includes(i.id)), i => i.amount);
   } else if ($('#ck-pending')) {
     pendingFixed = Math.min(c.fixedTotal, Math.max(0, parseMoney($('#ck-pending').value) || 0));
@@ -899,7 +906,7 @@ function viewMiMes() {
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
     </section>
-    <p class="footer">Holgura · v1.7</p>`;
+    <p class="footer">Holgura · v1.8</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -1416,6 +1423,10 @@ document.addEventListener('change', e => {
     if (el.dataset.cbind === 'start' && el.value) state.cycle.start = el.value;
     if (el.dataset.cbind === 'startBalance') { const v = parseMoney(el.value); if (Number.isFinite(v)) state.cycle.startBalance = v; }
     persist();
+  } else if (el.dataset.fixedId) {
+    const ids = [...document.querySelectorAll('[data-fixed-id]')].filter(x => x.checked).map(x => x.dataset.fixedId);
+    const counter = $('#ck-charged');
+    if (counter) counter.textContent = chargedText(state.cycle.fixedItems.filter(i => ids.includes(i.id)));
   } else if (el.dataset.budget) {
     const v = Math.max(0, parseMoney(el.value) || 0);
     state.settings.budgets = { ...(state.settings.budgets || {}), [el.dataset.budget]: v };

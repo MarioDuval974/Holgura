@@ -1,7 +1,7 @@
 // Service worker: guarda la app para que funcione sin conexión.
 // Sirve desde la caché al instante y, en segundo plano, descarga la versión nueva para la próxima vez.
 // Cambia CACHE en cada publicación: así el móvil detecta la versión nueva y la app se recarga sola.
-const CACHE = 'holgura-v1.7';
+const CACHE = 'holgura-v1.8';
 const FILES = [
   './', 'index.html', 'conectado.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/calc.js', 'js/store.js', 'js/bank.js', 'js/categories.js',
