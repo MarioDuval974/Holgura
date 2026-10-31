@@ -146,7 +146,8 @@ function livePlan(useGoal) {
   if (today < c.start || today >= end) return null;
 
   const back = s.bizumTo ? sp.bizumByDay || {} : {}; // Bizum devueltos que compensan gasto
-  const net = d => Math.max(0, (sp.byDay[d] || 0) - (back[d] || 0));
+  // Sin redondear a 0 por día: un Bizum devuelto un día sin gasto también resta de la semana
+  const net = d => (sp.byDay[d] || 0) - (back[d] || 0);
   const spentBetween = (from, to) => { let t = 0; for (let d = from; d < to; d = C.addDays(d, 1)) t += net(d); return t; };
   const available = c.income - c.fixedTotal - (useGoal ? Number(c.savingsGoal) || 0 : 0);
 
@@ -494,7 +495,7 @@ Tus revisiones y huchas no se tocan. ¿Continuar?`);
   const imported = (a.history || []).filter(h => !firstReal || h.end <= firstReal).map(h => ({ ...h, id: S.uid(), imported: true }));
   state.history = [...imported, ...real];
   state.rules = a.rules || [];
-  if (a.budgets) s.budgets = { ...a.budgets };
+  if (a.budgets) { s.budgets = { ...a.budgets }; mergeBizumBudget(); }
   state.bankSpend = null; // las reglas han cambiado: se vuelve a calcular
   state.analysis = { period: a.period, categories: a.categories || [], notes: a.notes || [], importedAt: C.todayStr() };
   syncCycle();
@@ -965,7 +966,7 @@ function viewMiMes() {
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
     </section>
-    <p class="footer">Holgura · v2.4</p>`;
+    <p class="footer">Holgura · v2.6</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -975,7 +976,7 @@ const dayToDayAvailable = () => {
   const c = state.cycle;
   return c ? c.income - c.fixedTotal - (Number(c.savingsGoal) || 0) : 0;
 };
-const budgetTotal = () => sum(BUDGET_CATEGORIES, c => (state.settings.budgets || {})[c] || 0);
+const budgetTotal = () => sum(budgetCategories(), c => (state.settings.budgets || {})[c] || 0);
 
 function budgetSummaryText() {
   const total = budgetTotal(), avail = dayToDayAvailable();
@@ -989,28 +990,34 @@ function budgetSection() {
   return `<section class="card">
     <h3>Presupuesto del día a día</h3>
     <p class="muted">Reparte por categorías lo que te queda tras los gastos fijos. Holgura lo compara con tus movimientos del banco y te avisa si vas rápido.</p>
-    <div class="budget-list">${BUDGET_CATEGORIES.map(cat => `
+    <div class="budget-list">${budgetCategories().map(cat => `
       <label class="budget-row"><span>${icon(cat)} ${cat}</span>
         <div class="money-input"><input inputmode="decimal" placeholder="—" data-budget="${cat}" value="${numStr(b[cat] || 0)}" aria-label="Tope de ${cat}"><em>€</em></div>
       </label>`).join('')}
     </div>
     <p class="fx-total" id="budget-summary">${budgetSummaryText()}</p>
-    <label class="field"><span>Los Bizum que te devuelven se descuentan de…</span>
-      <select data-bind="bizumTo" data-kind="text">
+    <label class="field"><span>Los Bizum cuentan en…</span>
+      <select data-bind="bizumTo" data-kind="text" data-rerender>
         ${BUDGET_CATEGORIES.filter(c => c !== 'Bizum').map(c => `<option value="${c}" ${state.settings.bizumTo === c ? 'selected' : ''}>${icon(c)} ${c}</option>`).join('')}
-        <option value="" ${!state.settings.bizumTo ? 'selected' : ''}>Ninguna (los veo aparte)</option>
+        <option value="" ${!state.settings.bizumTo ? 'selected' : ''}>Ninguna (los veo aparte, con su propio tope)</option>
       </select>
-      <small>Si pagas una cena y te devuelven tu parte por Bizum, lo gastado en esa categoría baja.</small>
+      <small>Los que envías suman en esa categoría y los que te devuelven restan: si pagas una cena y te devuelven tu parte, cuenta solo lo tuyo.</small>
     </label>
   </section>`;
 }
 
-// Gastado en una categoría: si es la elegida para los Bizum, se descuenta lo que te han devuelto
+// Categoría a la que van los Bizum (los que envías suman y los que te devuelven restan); '' = aparte
+const bizumTo = () => state.settings.bizumTo || '';
+// Categorías con tope: si los Bizum van a otra categoría, "Bizum" deja de tener tope propio
+const budgetCategories = () => BUDGET_CATEGORIES.filter(c => !(c === 'Bizum' && bizumTo()));
+
 // Nunca por debajo de 0: una devolución de algo pagado en el ciclo anterior no "regala" presupuesto en este
 function netSpent(cat, sp) {
-  const gross = Math.max(0, sp?.byCat[cat] || 0);
-  const back = sp && cat === state.settings.bizumTo ? sp.bizumIn || 0 : 0;
-  return { gross, back: Math.min(back, gross), net: Math.max(0, Math.round((gross - back) * 100) / 100) };
+  const isTo = Boolean(sp) && cat === bizumTo();
+  const sent = isTo ? Math.max(0, sp.byCat.Bizum || 0) : 0;
+  const gross = Math.max(0, sp?.byCat[cat] || 0) + sent;
+  const back = isTo ? Math.min(sp.bizumIn || 0, gross) : 0;
+  return { gross, sent, back, net: Math.max(0, Math.round((gross - back) * 100) / 100) };
 }
 
 function budgetStatus(spent, budget, elapsedFrac) {
@@ -1021,19 +1028,18 @@ function budgetStatus(spent, budget, elapsedFrac) {
 
 function budgetCard() {
   const b = state.settings.budgets || {};
-  const cats = BUDGET_CATEGORIES.filter(c => b[c] > 0);
+  const cats = budgetCategories().filter(c => b[c] > 0);
   if (!cats.length || !state.cycle) return '';
   const info = C.cycleInfo(state.cycle, state.settings);
   const elapsedFrac = info.elapsed / info.totalDays;
   const sp = state.bankSpend?.cycleId === state.cycle.id ? state.bankSpend : null;
   const remainingDays = Math.max(1, info.remaining);
   const totalSpent = sp ? sum(cats, c => netSpent(c, sp).net) : 0;
-  const bizumTo = state.settings.bizumTo;
-  const bizumAside = sp?.bizumIn && !(bizumTo && cats.includes(bizumTo));
+  const bizumAside = sp?.bizumIn && !(bizumTo() && cats.includes(bizumTo()));
 
   const rows = cats.map(cat => {
     const budget = b[cat];
-    const { gross, back, net: spent } = netSpent(cat, sp);
+    const { gross, sent, back, net: spent } = netSpent(cat, sp);
     const left = budget - spent;
     const st = budgetStatus(Math.max(0, spent), budget, elapsedFrac);
     // Por categoría se entiende mejor por semana que por día (1,50 €/día en bares no dice mucho)
@@ -1041,7 +1047,7 @@ function budgetCard() {
     return `<div class="budget-item">
       <div class="budget-top"><span>${icon(cat)} ${cat}</span><strong>${money(Math.max(0, spent))} <small>de ${money(budget)}</small></strong></div>
       <span class="bar budget-${st}"><i style="width:${Math.min(100, Math.max(0, spent / budget) * 100)}%"></i><b style="left:${Math.min(100, elapsedFrac * 100)}%"></b></span>
-      ${back ? `<small class="pos">${money(gross)} gastado − ${money(back)} devuelto por Bizum</small>` : ''}
+      ${back || sent ? `<small>${money(gross)} gastado${sent ? ` (${money(sent)} por Bizum)` : ''}${back ? ` <span class="pos">− ${money(back)} devuelto por Bizum</span>` : ''}</small>` : ''}
       <small class="${st === 'red' ? 'neg' : ''}">${left >= 0 ? `Te quedan ${money(left)} ${pace}` : `Te has pasado ${money(-left)}`}</small>
     </div>`;
   }).join('');
@@ -1055,6 +1061,15 @@ function budgetCard() {
   </section>`;
 }
 
+// Si los Bizum van a una categoría, su tope propio se suma a esa categoría (el reparto total no cambia)
+function mergeBizumBudget() {
+  const s = state.settings, b = s.budgets || {};
+  if (!s.bizumTo || !b.Bizum) return false;
+  b[s.bizumTo] = (b[s.bizumTo] || 0) + b.Bizum;
+  delete b.Bizum;
+  return true;
+}
+
 // Lee los movimientos del ciclo, guarda el gasto por categoría y avisa de lo que va rápido
 async function refreshSpend({ silent = false, list = null } = {}) {
   const c = state.cycle;
@@ -1065,7 +1080,7 @@ async function refreshSpend({ silent = false, list = null } = {}) {
     persist();
     const b = state.settings.budgets || {};
     const info = C.cycleInfo(c, state.settings);
-    const alerts = BUDGET_CATEGORIES.filter(cat => b[cat] > 0)
+    const alerts = budgetCategories().filter(cat => b[cat] > 0)
       .map(cat => ({ cat, st: budgetStatus(Math.max(0, netSpent(cat, state.bankSpend).net), b[cat], info.elapsed / info.totalDays) }))
       .filter(a => a.st !== 'green');
     if (alerts.length && !list) {
@@ -1492,6 +1507,7 @@ document.addEventListener('change', e => {
     if (el.dataset.bind === 'payDay') v = Math.min(31, v);
     const prevSalary = state.settings.salary;
     setPath(state.settings, el.dataset.bind, v);
+    if (el.dataset.bind === 'bizumTo') mergeBizumBudget();
     syncCycle(prevSalary);
     persist();
     if ('rerender' in el.dataset) render();
@@ -1575,6 +1591,7 @@ document.addEventListener('visibilitychange', () => {
   if (tab === 'mimes' || (B.getConfig().password && !B.isReady())) loadBankStatus();
 });
 
+if (mergeBizumBudget()) persist(); // v2.6: el tope de "Bizum" pasa a la categoría de los Bizum
 render();
 if (B.getConfig().password) loadBankStatus();
 

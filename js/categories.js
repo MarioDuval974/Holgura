@@ -76,13 +76,14 @@ export function surelyBizum(tx) {
 
 export function looksLikeBizum(tx) {
   if (surelyBizum(tx)) return true;
-  const name = (tx.counterparty || '').toUpperCase();
+  const name = (tx.counterparty || '').replace(/;/g, ' ').toUpperCase();
   const card = /TARJ|CARD|POS\b|CCRD|COMPRA/.test(`${tx.code || ''}`.toUpperCase());
   return Boolean(name) && !COMPANY.test(name) && !tx.mcc && !card && (tx.counterAccount || /TRANSF|TRF|ICDT|RCDT|PMNT/.test(`${tx.code || ''}`.toUpperCase()));
 }
 
 export function categorize(tx, rules = []) {
-  const text = `${tx.description || ''} ${tx.counterparty || ''} ${tx.code || ''} ${tx.note || ''}`.toUpperCase();
+  // El banco manda los nombres como "DANIEL;CADENAS;GUERRERO": se cambia el ; por espacio para que las reglas coincidan
+  const text = `${tx.description || ''} ${tx.counterparty || ''} ${tx.code || ''} ${tx.note || ''}`.replace(/;/g, ' ').toUpperCase();
   const abs = Math.round(Math.abs(Number(tx.amount) || 0) * 100) / 100;
   // Un Bizum seguro va primero: así su concepto ("Berlin", "cena"…) no se confunde con un comercio de tus reglas
   if (surelyBizum(tx)) return { category: 'Bizum', label: tx.amount > 0 ? 'Bizum recibido' : 'Bizum enviado', fixed: false };
