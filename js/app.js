@@ -899,7 +899,7 @@ function viewMiMes() {
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
     </section>
-    <p class="footer">Holgura · v1.5</p>`;
+    <p class="footer">Holgura · v1.7</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -909,7 +909,7 @@ const dayToDayAvailable = () => {
   const c = state.cycle;
   return c ? c.income - c.fixedTotal - (Number(c.savingsGoal) || 0) : 0;
 };
-const budgetTotal = () => sum(Object.values(state.settings.budgets || {}), v => v);
+const budgetTotal = () => sum(BUDGET_CATEGORIES, c => (state.settings.budgets || {})[c] || 0);
 
 function budgetSummaryText() {
   const total = budgetTotal(), avail = dayToDayAvailable();
@@ -929,8 +929,21 @@ function budgetSection() {
       </label>`).join('')}
     </div>
     <p class="fx-total" id="budget-summary">${budgetSummaryText()}</p>
-    <small class="hint">Los Bizum que te devuelven no restan del presupuesto: te dan margen extra y los verás aparte.</small>
+    <label class="field"><span>Los Bizum que te devuelven se descuentan de…</span>
+      <select data-bind="bizumTo" data-kind="text">
+        ${BUDGET_CATEGORIES.filter(c => c !== 'Bizum').map(c => `<option value="${c}" ${state.settings.bizumTo === c ? 'selected' : ''}>${icon(c)} ${c}</option>`).join('')}
+        <option value="" ${!state.settings.bizumTo ? 'selected' : ''}>Ninguna (los veo aparte)</option>
+      </select>
+      <small>Si pagas una cena y te devuelven tu parte por Bizum, lo gastado en esa categoría baja.</small>
+    </label>
   </section>`;
+}
+
+// Gastado en una categoría: si es la elegida para los Bizum, se descuenta lo que te han devuelto
+function netSpent(cat, sp) {
+  const gross = sp?.byCat[cat] || 0;
+  const back = sp && cat === state.settings.bizumTo ? sp.bizumIn || 0 : 0;
+  return { gross, back, net: Math.round((gross - back) * 100) / 100 };
 }
 
 function budgetStatus(spent, budget, elapsedFrac) {
@@ -947,24 +960,28 @@ function budgetCard() {
   const elapsedFrac = info.elapsed / info.totalDays;
   const sp = state.bankSpend?.cycleId === state.cycle.id ? state.bankSpend : null;
   const remainingDays = Math.max(1, info.remaining);
-  const totalSpent = sp ? sum(cats, c => sp.byCat[c] || 0) : 0;
+  const totalSpent = sp ? sum(cats, c => netSpent(c, sp).net) : 0;
+  const bizumTo = state.settings.bizumTo;
+  const bizumAside = sp?.bizumIn && !(bizumTo && cats.includes(bizumTo));
 
   const rows = cats.map(cat => {
-    const budget = b[cat], spent = sp?.byCat[cat] || 0;
+    const budget = b[cat];
+    const { gross, back, net: spent } = netSpent(cat, sp);
     const left = budget - spent;
-    const st = budgetStatus(spent, budget, elapsedFrac);
+    const st = budgetStatus(Math.max(0, spent), budget, elapsedFrac);
     // Por categoría se entiende mejor por semana que por día (1,50 €/día en bares no dice mucho)
     const pace = left > 0 && remainingDays > 7 ? `(≈ ${money((left / remainingDays) * 7)}/semana)` : '';
     return `<div class="budget-item">
-      <div class="budget-top"><span>${icon(cat)} ${cat}</span><strong>${money(spent)} <small>de ${money(budget)}</small></strong></div>
-      <span class="bar budget-${st}"><i style="width:${Math.min(100, (spent / budget) * 100)}%"></i><b style="left:${Math.min(100, elapsedFrac * 100)}%"></b></span>
+      <div class="budget-top"><span>${icon(cat)} ${cat}</span><strong>${money(Math.max(0, spent))} <small>de ${money(budget)}</small></strong></div>
+      <span class="bar budget-${st}"><i style="width:${Math.min(100, Math.max(0, spent / budget) * 100)}%"></i><b style="left:${Math.min(100, elapsedFrac * 100)}%"></b></span>
+      ${back ? `<small class="pos">${money(gross)} gastado − ${money(back)} devuelto por Bizum</small>` : ''}
       <small class="${st === 'red' ? 'neg' : ''}">${left >= 0 ? `Te quedan ${money(left)} ${pace}` : `Te has pasado ${money(-left)}`}</small>
     </div>`;
   }).join('');
 
   return `<section class="card">
     <div class="card-head"><h3>🎯 Presupuesto del ciclo</h3>${B.isReady() ? '<button class="link" data-act="spend-refresh">Actualizar</button>' : ''}</div>
-    ${sp ? `<p class="muted">Llevas <b>${money(totalSpent)}</b> de ${money(budgetTotal())} · día ${info.elapsed} de ${info.totalDays}${sp.bizumIn ? ` · <span class="pos">+${money(sp.bizumIn)} devueltos por Bizum</span>` : ''}</p>`
+    ${sp ? `<p class="muted">Llevas <b>${money(Math.max(0, totalSpent))}</b> de ${money(budgetTotal())} · día ${info.elapsed} de ${info.totalDays}${bizumAside ? ` · <span class="pos">+${money(sp.bizumIn)} devueltos por Bizum</span>` : ''}</p>`
       : `<p class="muted">${B.isReady() ? 'Pulsa «Actualizar» para leer tus movimientos del banco.' : 'Conecta tu banco en Mi mes para ver cuánto llevas en cada categoría.'}</p>`}
     ${rows}
     ${sp ? `<p class="note">Actualizado ${new Date(sp.at).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}. La rayita marca hasta dónde «tocaría» llevar gastado hoy.</p>` : ''}
@@ -982,7 +999,7 @@ async function refreshSpend({ silent = false, list = null } = {}) {
     const b = state.settings.budgets || {};
     const info = C.cycleInfo(c, state.settings);
     const alerts = BUDGET_CATEGORIES.filter(cat => b[cat] > 0)
-      .map(cat => ({ cat, st: budgetStatus(state.bankSpend.byCat[cat] || 0, b[cat], info.elapsed / info.totalDays) }))
+      .map(cat => ({ cat, st: budgetStatus(Math.max(0, netSpent(cat, state.bankSpend).net), b[cat], info.elapsed / info.totalDays) }))
       .filter(a => a.st !== 'green');
     if (alerts.length && !list) {
       const worst = alerts.find(a => a.st === 'red') || alerts[0];
@@ -1103,10 +1120,13 @@ async function openTransactions() {
     const spent = -sum(list.filter(t => t.amount < 0), t => t.amount);
     const days = [...new Set(list.map(t => t.date))];
 
-    // Salidas por categoría (de mayor a menor)
+    // Salidas por categoría (de mayor a menor); las devoluciones restan de su categoría (p. ej. Waylet)
     const byCat = new Map();
-    for (const t of list.filter(x => x.amount < 0)) byCat.set(t.category, (byCat.get(t.category) || 0) - t.amount);
-    const cats = [...byCat].sort((a, b) => b[1] - a[1]);
+    for (const t of list) {
+      const refund = t.amount > 0 && t.category !== 'Bizum' && BUDGET_CATEGORIES.includes(t.category);
+      if (t.amount < 0 || refund) byCat.set(t.category, (byCat.get(t.category) || 0) - t.amount);
+    }
+    const cats = [...byCat].filter(([, v]) => v > 0.005).sort((a, b) => b[1] - a[1]);
     const max = Math.max(1, ...cats.map(([, v]) => v));
 
     openSheet('Movimientos', `

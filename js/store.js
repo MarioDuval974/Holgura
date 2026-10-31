@@ -23,6 +23,7 @@ export function defaultState() {
       weekendFactor: 2,         // un día de fin de semana gasta como N días entre semana (en auto, punto de partida)
       fridayWeekend: false,
       budgets: {},              // tope por categoría del día a día para cada ciclo { 'Supermercado': 150, … }
+      bizumTo: 'Restaurantes y bares', // los Bizum que te devuelven se restan de esta categoría ('' = aparte)
     },
     cycle: null,                // { id, start, startBalance, income, fixedTotal, fixedItems, savingsGoal }
     checkins: [],               // { id, cycleId, date, balance, pendingFixed, pendingIds, extraIncome }

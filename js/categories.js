@@ -34,7 +34,7 @@ export const icon = cat => CATEGORIES[cat] || '📦';
 export const FIXED_CATEGORIES = ['Deudas', 'Vivienda', 'Suscripciones', 'Seguros', 'Gimnasio', 'Cuotas', 'Telefonía', 'Nómina', 'Ahorro', 'Impuestos'];
 // Categorías del día a día a las que se les puede poner un tope
 export const BUDGET_CATEGORIES = ['Supermercado', 'Restaurantes y bares', 'Fiesta y conciertos', 'Transporte', 'Compras',
-  'Efectivo', 'Bizum', 'Comida a domicilio', 'Lotería', 'Viajes', 'Salud y cuidado', 'Familia', 'Otros'];
+  'Bizum', 'Comida a domicilio', 'Lotería', 'Viajes', 'Salud y cuidado', 'Familia', 'Otros'];
 
 // [categoría, expresión] — la primera que coincide gana
 const DEFAULT_RULES = [
@@ -65,7 +65,7 @@ export function categorize(tx, rules = []) {
   const abs = Math.round(Math.abs(Number(tx.amount) || 0) * 100) / 100;
   for (const r of rules) {
     try {
-      if (new RegExp(r.match, 'i').test(text) && (r.amount == null || Math.abs(r.amount - abs) < 0.005)) {
+      if (new RegExp(r.match, 'i').test(text) && (r.amount == null || Math.abs(r.amount - abs) < 0.005) && (r.min == null || abs >= r.min)) {
         return { category: r.category, label: r.label || null, fixed: Boolean(r.fixed) || FIXED_CATEGORIES.includes(r.category) };
       }
     } catch { /* regla mal escrita: se ignora */ }
@@ -74,14 +74,16 @@ export function categorize(tx, rules = []) {
   return { category: 'Otros', label: null, fixed: false };
 }
 
-// Lo gastado en el día a día por categoría (solo salidas) y lo que te han devuelto por Bizum
+// Lo gastado en el día a día por categoría y lo que te han devuelto por Bizum.
+// Las devoluciones (p. ej. el descuento de Waylet) restan de su propia categoría.
 export function spendByCategory(list) {
   const byCat = {};
   let bizumIn = 0;
   for (const t of list) {
     if (t.fixed) continue;
-    if (t.amount < 0) byCat[t.category] = Math.round(((byCat[t.category] || 0) - t.amount) * 100) / 100;
-    else if (t.category === 'Bizum') bizumIn += t.amount;
+    if (t.category === 'Bizum' && t.amount > 0) { bizumIn += t.amount; continue; }
+    if (t.amount > 0 && !BUDGET_CATEGORIES.includes(t.category)) continue; // ingresos que no son devoluciones
+    byCat[t.category] = Math.round(((byCat[t.category] || 0) - t.amount) * 100) / 100;
   }
   return { byCat, bizumIn: Math.round(bizumIn * 100) / 100 };
 }
