@@ -266,10 +266,13 @@ export function recommendation(state, analysis = null) {
 
 // ---------- Semáforo de una revisión ----------
 
+// El semáforo mira solo este ciclo: lo gastado en el día a día frente a lo que te sobra tras los fijos
+// (sin adivinar con meses anteriores, porque cada mes es distinto).
 export function analyze(state, checkin) {
   const c = state.cycle, s = effectiveSettings(state);
   const info = cycleInfo(c, s, checkin.date);
-  const elapsed = Math.max(1, info.elapsed);
+  // Días transcurridos contando el de la revisión (lo que has gastado hoy ya está en el saldo)
+  const elapsed = Math.max(1, Math.min(info.totalDays, info.elapsed + 1));
   const remaining = Math.max(0, info.totalDays - elapsed);
 
   const cycleCheckins = state.checkins.filter(k => k.cycleId === c.id && k.date <= checkin.date && k.id !== checkin.id);
@@ -283,39 +286,29 @@ export function analyze(state, checkin) {
 
   // Lo gastado en el día a día = lo que ha bajado la cuenta, sin contar fijos, huchas ni ingresos extra
   const variable = c.startBalance - balance - fixedCharged - moved + extra;
-  const observedDaily = Math.max(0, variable) / elapsed;
+  const spent = Math.max(0, variable);
+  const observedDaily = spent / elapsed;
 
-  // Los días se ponderan: un fin de semana cuenta más que un día entre semana
-  const from = addDays(c.start, elapsed);
-  const elapsedW = Math.max(1, weightedDays(c.start, from, s));
-  const remainingW = weightedDays(from, info.end, s);
-  const cycleW = Math.max(1, weightedDays(c.start, info.end, s));
-
-  // Los primeros días el ritmo real es poco fiable: se mezcla con lo aprendido de meses anteriores
-  const hist = learnedDaily(state.history);
-  const w = hist == null ? 1 : Math.min(1, elapsed / 10);
-  const daily = w * observedDaily + (1 - w) * hist;
-  const unit = w * (Math.max(0, variable) / elapsedW) + (1 - w) * (hist ?? 0) * info.totalDays / cycleW;
-
-  const projectedVariable = Math.max(0, variable) + unit * remainingW;
-  const margin = c.income + extra - c.fixedTotal; // lo que hay para el día a día + ahorro
+  const margin = c.income + extra - c.fixedTotal; // lo que te sobra tras los fijos
   const goal = Number(c.savingsGoal) || 0;
-  const budgetVar = margin - goal;
-  const tight = margin * 0.05;
+  const available = margin - goal;                // lo que puedes gastar sin tocar tu objetivo de ahorro
+
+  // Lo que "tocaría" llevar gastado hoy: lo que te sobra repartido por días (el fin de semana pesa más)
+  const from = addDays(c.start, elapsed);
+  const cycleW = Math.max(1, weightedDays(c.start, info.end, s));
+  const expected = Math.max(0, available) * weightedDays(c.start, from, s) / cycleW;
 
   let status = 'green';
-  if (projectedVariable > margin) status = 'red';
-  else if (projectedVariable > budgetVar || projectedVariable > margin - tight) status = 'yellow';
+  if (spent > margin) status = 'red';
+  else if (spent > available || spent > expected * 1.05 + 1) status = 'yellow';
 
   return {
     status, elapsed, remaining, totalDays: info.totalDays, end: info.end,
-    variable: round2(variable), observedDaily, daily, projectedVariable,
-    margin, goal, saved, extra, pendingFixed,
-    projectedSavings: margin - projectedVariable,
-    planGoal: spendingPlan(budgetVar - variable, from, info.end, s), // para cumplir el objetivo de ahorro
-    planNoJar: spendingPlan(margin - variable, from, info.end, s),   // para no tocar las huchas
-    deficit: Math.max(0, projectedVariable - margin),                // lo que faltaría (saldría de la hucha)
-    projectedEndBalance: balance - pendingFixed - unit * remainingW - Math.max(0, goal - saved),
+    variable: round2(variable), spent: round2(spent), observedDaily, daily: observedDaily,
+    margin, goal, available, expected, left: available - spent, saved, extra, pendingFixed,
+    planGoal: spendingPlan(available - spent, from, info.end, s), // para cumplir el objetivo de ahorro
+    planNoJar: spendingPlan(margin - spent, from, info.end, s),   // para no tocar las huchas
+    deficit: Math.max(0, spent - margin),                          // lo que ya falta (saldría de la hucha)
   };
 }
 

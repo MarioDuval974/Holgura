@@ -142,6 +142,13 @@ header.top .sub { color: var(--muted); margin: 4px 0 0; font-size: 15px; }
 .allow-grid strong em { font-style: normal; font-size: 13px; font-weight: 500; color: var(--muted); margin-left: 2px; }
 
 .pos { color: var(--green); }
+.prog { margin-top: 8px; font-size: 12px; color: var(--muted); }
+.prog > span:first-child { display: block; }
+.prog b { display: block; color: var(--ink); font-size: 15px; font-variant-numeric: tabular-nums; white-space: nowrap; margin: 1px 0 4px; }
+.prog .bar { height: 6px; }
+.prog .bar i { background: var(--green); }
+.prog.over b { color: var(--red); }
+.prog.over .bar i { background: var(--red); }
 .budget-list { display: grid; gap: 6px; margin: 10px 0; }
 .budget-row { display: grid; grid-template-columns: 1fr 112px; align-items: center; gap: 10px; font-size: 15px; }
 .budget-row input { padding: 9px 30px 9px 12px; text-align: right; }

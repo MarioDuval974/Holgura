@@ -116,45 +116,81 @@ const banner = (icon, title, text, act, btn) => `
 
 const STATUS = {
   green: { title: 'Vas bien', icon: '🟢' },
-  yellow: { title: 'Ajusta un poco', icon: '🟡' },
-  red: { title: 'Tendrás que tirar de la hucha', icon: '🔴' },
+  yellow: { title: 'Vas un poco rápido', icon: '🟡' },
+  red: { title: 'Te has pasado este ciclo', icon: '🔴' },
 };
 
+// Solo con lo que ha pasado en este ciclo: lo gastado frente a lo que te sobra tras los fijos
 function statusMessage(a) {
+  const of = `de los <b>${money(a.available)}</b> que te sobran tras los fijos${a.goal ? ' (sin tocar tu ahorro)' : ''}`;
+  const days = a.remaining === 1 ? 'mañana' : `los próximos ${a.remaining} días`;
   if (a.status === 'green') {
-    const extra = a.projectedSavings - a.goal;
-    return a.goal
-      ? `Al ritmo actual llegarás bien al cobro y cumplirás tu objetivo de ahorro.${extra >= 20 ? ` Incluso podrías apartar unos <b>${money(extra)}</b> más.` : ''}`
-      : `Al ritmo actual llegarás bien al cobro y te sobrarán unos <b>${money(a.projectedSavings)}</b>.`;
+    return `Llevas <b>${money(a.spent)}</b> ${of}. Te quedan <b>${money(a.left)}</b> para ${days}.`;
   }
   if (a.status === 'yellow') {
-    return a.goal && a.projectedVariable > a.margin - a.goal
-      ? `Si sigues así solo podrás ahorrar <b>${money(Math.max(0, a.projectedSavings))}</b> de tus ${money(a.goal)}. Para cumplir el objetivo, ajusta un poco tu gasto.`
-      : `Vas muy justo: te sobrarían solo <b>${money(Math.max(0, a.projectedSavings))}</b>. Ajusta un poco tu gasto.`;
+    return a.spent > a.available
+      ? `Ya has gastado lo que te sobraba sin tocar tu objetivo de ahorro (<b>${money(a.spent)}</b> de ${money(a.available)}). Lo que gastes a partir de ahora sale del ahorro previsto.`
+      : `Llevas <b>${money(a.spent)}</b> ${of}; a estas alturas del ciclo lo normal serían unos ${money(a.expected)}. Te quedan <b>${money(a.left)}</b> para ${days}.`;
   }
-  return a.planNoJar.weekday <= 0
-    ? `Ya has gastado más de lo que ingresas este ciclo. Necesitarás unos <b>${money(a.deficit)}</b> de tus huchas para llegar al cobro.`
-    : `Al ritmo actual gastarás unos <b>${money(a.deficit)}</b> más de lo que ingresas. Para no tocar tus huchas, ajusta tu gasto.`;
+  return `Has gastado <b>${money(a.spent)}</b> en el día a día y este ciclo te sobraban <b>${money(a.margin)}</b> tras los fijos. Te faltan <b>${money(a.deficit)}</b>: si no ajustas, saldrán de la hucha.${
+    a.elapsed <= 5 ? '<br><small>¿Te parece raro tan pronto? Revisa en Mi mes el saldo con el que empezaste el ciclo.</small>' : ''}`;
 }
+
+// Con los movimientos del banco: lo que puedes gastar hoy y esta semana, y lo que llevas gastado.
+// Se calcula desde el principio del día (o de la semana), así "llevas X / Y" cuadra.
+function livePlan(useGoal) {
+  const c = state.cycle, sp = state.bankSpend;
+  if (!c || sp?.cycleId !== c.id || !sp.byDay) return null;
+  const s = C.effectiveSettings(state), today = C.todayStr();
+  const end = C.expectedCycleEnd(c.start, s);
+  if (today < c.start || today >= end) return null;
+
+  const back = s.bizumTo ? sp.bizumByDay || {} : {}; // Bizum devueltos que compensan gasto
+  const net = d => (sp.byDay[d] || 0) - (back[d] || 0);
+  const spentBetween = (from, to) => { let t = 0; for (let d = from; d < to; d = C.addDays(d, 1)) t += net(d); return t; };
+  const available = c.income - c.fixedTotal - (useGoal ? Number(c.savingsGoal) || 0 : 0);
+
+  const day = C.spendingPlan(available - spentBetween(c.start, today), today, end, s);
+  const monday = C.addDays(today, -((C.weekday(today) + 6) % 7));
+  const weekStart = monday < c.start ? c.start : monday;
+  const week = C.spendingPlan(available - spentBetween(c.start, weekStart), weekStart, end, s);
+  return {
+    plan: day,
+    todayIsWeekend: C.isWeekend(today, s),
+    today: { spent: net(today), allowance: C.isWeekend(today, s) ? day.weekend : day.weekday },
+    week: { spent: spentBetween(weekStart, C.addDays(today, 1)), allowance: week.thisWeek, from: weekStart, until: week.weekUntil },
+  };
+}
+
+const progress = (label, spent, allowance) => `
+  <div class="prog ${spent > allowance + 0.005 ? 'over' : ''}">
+    <span>${label}</span><b>${money(Math.max(0, spent)).replace(/\s?€/, '')} / ${money(allowance)}</b>
+    <span class="bar"><i style="width:${allowance > 0 ? Math.min(100, (Math.max(0, spent) / allowance) * 100) : 100}%"></i></span>
+  </div>`;
 
 // Lo que puedes gastar a partir de la revisión, por día (entre semana / fin de semana) o por semana
 function allowanceBlock(a) {
   const s = state.settings;
   if (a.remaining <= 0) return '';
   const useGoal = a.goal > 0 && a.planGoal.weekday > 0;
-  const plan = useGoal ? a.planGoal : a.planNoJar;
+  const live = livePlan(useGoal);
+  const plan = live ? live.plan : useGoal ? a.planGoal : a.planNoJar;
   let body;
   if (s.allowanceView === 'semana') {
     body = `<div class="allow-grid">
-      <div><span>Esta semana<small>de hoy al ${dayFmt(plan.weekUntil)}</small></span><strong>${money(plan.thisWeek)}</strong></div>
+      <div><span>Esta semana<small>${live ? `del ${dateFmt(live.week.from, { weekday: 'short', day: 'numeric' })} al ${dateFmt(live.week.until, { weekday: 'short', day: 'numeric' })}` : `de hoy al ${dayFmt(plan.weekUntil)}`}</small></span>
+        <strong>${money(live ? live.week.allowance : plan.thisWeek)}</strong>
+        ${live ? progress('Llevas', live.week.spent, live.week.allowance) : ''}</div>
       <div><span>Semana completa<small>de lunes a domingo</small></span><strong>${money(plan.fullWeek)}</strong></div>
     </div>`;
   } else if (C.effectiveSettings(state).weekendFactor === 1) {
-    body = `<div class="allow-grid one"><div><span>Cada día</span><strong>${money(plan.weekday)}</strong></div></div>`;
+    body = `<div class="allow-grid one"><div><span>Cada día</span><strong>${money(plan.weekday)}</strong>
+      ${live ? progress('Hoy llevas', live.today.spent, live.today.allowance) : ''}</div></div>`;
   } else {
+    const todayBox = weekend => (live && live.todayIsWeekend === weekend ? progress('Hoy llevas', live.today.spent, live.today.allowance) : '');
     body = `<div class="allow-grid">
-      <div><span>Entre semana<small>${s.fridayWeekend ? 'lunes a jueves' : 'lunes a viernes'}</small></span><strong>${money(plan.weekday)}<em>/día</em></strong></div>
-      <div><span>Fin de semana<small>${s.fridayWeekend ? 'viernes a domingo' : 'sábado y domingo'}</small></span><strong>${money(plan.weekend)}<em>/día</em></strong></div>
+      <div><span>Entre semana<small>${s.fridayWeekend ? 'lunes a jueves' : 'lunes a viernes'}</small></span><strong>${money(plan.weekday)}<em>/día</em></strong>${todayBox(false)}</div>
+      <div><span>Fin de semana<small>${s.fridayWeekend ? 'viernes a domingo' : 'sábado y domingo'}</small></span><strong>${money(plan.weekend)}<em>/día</em></strong>${todayBox(true)}</div>
     </div>`;
   }
   return `<div class="allow">
@@ -185,9 +221,9 @@ function statusBlock(a, k) {
       <p class="status-text">${statusMessage(a)}</p>
       ${allowanceBlock(a)}
       <div class="stats">
-        <div><span>Gastado en el día a día</span><strong>${money(Math.max(0, a.variable))}</strong></div>
-        <div><span>Ritmo</span><strong>${money(a.daily)}/día</strong></div>
-        <div><span>Saldo previsto al cobrar</span><strong class="${a.projectedEndBalance < 0 ? 'neg' : ''}">${money(a.projectedEndBalance)}</strong></div>
+        <div><span>Gastado este ciclo</span><strong>${money(a.spent)}</strong></div>
+        <div><span>Te queda</span><strong class="${a.left < 0 ? 'neg' : ''}">${money(a.left)}</strong></div>
+        <div><span>Tu ritmo</span><strong>${money(a.daily)}/día</strong></div>
       </div>
     </section>`;
 }
@@ -929,7 +965,7 @@ function viewMiMes() {
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
     </section>
-    <p class="footer">Holgura · v1.9</p>`;
+    <p class="footer">Holgura · v2.1</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -1514,10 +1550,11 @@ document.addEventListener('visibilitychange', () => {
 render();
 if (B.getConfig().password) loadBankStatus();
 
-// Si hay presupuesto y banco conectado, se actualiza solo al abrir la app (como mucho cada 3 horas)
+// Con el banco conectado, el gasto (presupuesto y "hoy llevas") se actualiza solo al abrir la app,
+// como mucho cada hora para no pedir datos al banco a cada momento
 const spendAge = state.bankSpend ? Date.now() - new Date(state.bankSpend.at) : Infinity;
-if (state.setup && B.isReady() && Object.keys(state.settings.budgets || {}).length
-    && (state.bankSpend?.cycleId !== state.cycle?.id || spendAge > 3 * 3600 * 1000)) {
+if (state.setup && B.isReady()
+    && (state.bankSpend?.cycleId !== state.cycle?.id || !state.bankSpend?.byDay || spendAge > 3600 * 1000)) {
   refreshSpend({ silent: true });
 }
 

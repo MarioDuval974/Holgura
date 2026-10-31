@@ -46,6 +46,7 @@ const DEFAULT_RULES = [
   ['Seguros', /MAPFRE|MYBOX|SEGURO|MUTUA|AXA|ALLIANZ|SANITAS|ADESLAS/],
   ['Gimnasio', /BASIC.?FIT|GYM|FITNESS/],
   ['Telefonía', /SIMYO|MOVISTAR|VODAFONE|ORANGE|DIGI|LOWI|O2 /],
+  ['Cuotas', /COMISSIO OBRER|CCOO|\bUGT\b|CUOTA SOCIO/],
   ['Supermercado', /MERCADONA|LIDL|ALCAMPO|CARREF|CRF EXPRESS|CONDIS|\bDIA\b|CONSUM|BON PREU|ESCLAT|COVIRAN|SUPERMERCA|SUPERMARKET|ALDI|CAPRABO|EROSKI|AHORRAMAS|ALIMENTACI/],
   ['Comida a domicilio', /GLOVO|JUST ?EAT|UBER ?EATS|DELIVEROO/],
   ['Fiesta y conciertos', /FESTIVAL|FESTVAL|TOMORROWLAND|MEDUSA|TICKET|DICE\.FM|PAYLOGIC|RESIDENT ADVISOR|SALA |DISCOTECA|CASHLESS|CINES?\b|MULTICINES|OKTOBERFEST|SUTTON|SHOKO|APOLO|LUZ DE GAS/],
@@ -77,13 +78,19 @@ export function categorize(tx, rules = []) {
 // Lo gastado en el día a día por categoría y lo que te han devuelto por Bizum.
 // Las devoluciones (p. ej. el descuento de Waylet) restan de su propia categoría.
 export function spendByCategory(list) {
-  const byCat = {};
+  const byCat = {}, byDay = {}, bizumByDay = {};
+  const add = (obj, key, v) => { obj[key] = Math.round(((obj[key] || 0) + v) * 100) / 100; };
   let bizumIn = 0;
   for (const t of list) {
     if (t.fixed) continue;
-    if (t.category === 'Bizum' && t.amount > 0) { bizumIn += t.amount; continue; }
+    if (t.category === 'Bizum' && t.amount > 0) {
+      bizumIn += t.amount;
+      if (t.date) add(bizumByDay, t.date, t.amount);
+      continue;
+    }
     if (t.amount > 0 && !BUDGET_CATEGORIES.includes(t.category)) continue; // ingresos que no son devoluciones
-    byCat[t.category] = Math.round(((byCat[t.category] || 0) - t.amount) * 100) / 100;
+    add(byCat, t.category, -t.amount);
+    if (t.date) add(byDay, t.date, -t.amount); // gasto del día a día por fecha
   }
-  return { byCat, bizumIn: Math.round(bizumIn * 100) / 100 };
+  return { byCat, byDay, bizumByDay, bizumIn: Math.round(bizumIn * 100) / 100 };
 }
