@@ -25,8 +25,25 @@ export function makeDate(y, m0, d) {
 const round2 = n => Math.round(n * 100) / 100;
 const sum = (arr, f = x => x) => arr.reduce((a, x) => a + (Number(f(x)) || 0), 0);
 
+// Gastos fijos de un mes normal (sin contar los que solo se cobran algunos meses, p. ej. trimestrales)
 export function fixedTotalOf(settings) {
-  return settings.fixedMode === 'total' ? Number(settings.fixedTotal) || 0 : sum(settings.fixedItems, i => i.amount);
+  return settings.fixedMode === 'total'
+    ? Number(settings.fixedTotal) || 0
+    : sum(settings.fixedItems.filter(i => !i.months?.length), i => i.amount);
+}
+export const periodicTotalOf = settings =>
+  settings.fixedMode === 'total' ? 0 : sum(settings.fixedItems.filter(i => i.months?.length), i => i.amount);
+
+// Gastos que tocan en el ciclo [start, end): los mensuales siempre; los de meses concretos solo si cae uno
+export function dueItems(items, start, end) {
+  return items.filter(i => {
+    if (!i.months?.length) return true;
+    for (let d = start; d < end; d = addDays(d, 1)) {
+      const [, m, dd] = d.split('-').map(Number);
+      if (i.months.includes(m) && (!i.day || dd === Math.min(Number(i.day), daysInMonth(Number(d.slice(0, 4)), m - 1)))) return true;
+    }
+    return false;
+  });
 }
 
 // ---------- Ciclos ----------

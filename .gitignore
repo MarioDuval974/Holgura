@@ -3,6 +3,14 @@
 
 # Copias de seguridad exportadas desde la app: contienen tus datos, nunca se suben
 holgura-copia-*.json
+holgura-analisis*.json
+
+# Extractos y exportaciones del banco: son datos personales, nunca se suben
+*.csv
+*.xls
+*.xlsx
+*.ofx
+*.qif
 
 # Claves privadas (p. ej. la de Enable Banking): jamás deben acabar en GitHub
 *.pem

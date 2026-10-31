@@ -2,6 +2,7 @@
 import * as C from './calc.js';
 import * as S from './store.js';
 import * as B from './bank.js';
+import { CATEGORY_NAMES, BUDGET_CATEGORIES, icon, categorize, spendByCategory } from './categories.js';
 
 let state = S.load();
 let bankUI = { status: null, loading: false, error: null }; // estado de la conexión con el banco
@@ -78,10 +79,16 @@ function setPath(obj, path, value) {
 
 // El ciclo en curso refleja los cambios de "Mi mes" (gastos fijos y sueldo)
 function syncCycle(prevSalary) {
-  const c = state.cycle;
+  const c = state.cycle, s = state.settings;
   if (!c) return;
-  c.fixedTotal = C.fixedTotalOf(state.settings);
-  c.fixedItems = state.settings.fixedMode === 'desglose' ? state.settings.fixedItems.map(i => ({ ...i })) : [];
+  if (s.fixedMode === 'desglose') {
+    // Solo los gastos que se cobran dentro de este ciclo (los trimestrales, solo cuando tocan)
+    c.fixedItems = C.dueItems(s.fixedItems, c.start, C.expectedCycleEnd(c.start, s)).map(i => ({ ...i }));
+    c.fixedTotal = sum(c.fixedItems, i => i.amount);
+  } else {
+    c.fixedItems = [];
+    c.fixedTotal = C.fixedTotalOf(s);
+  }
   if (prevSalary !== undefined && c.income === prevSalary) c.income = Number(state.settings.salary) || 0;
 }
 
@@ -192,18 +199,39 @@ function fixedEditor() {
     html += moneyField('Total de gastos fijos al mes', 'data-bind="fixedTotal" data-kind="money"', numStr(s.fixedTotal),
       'Alquiler o hipoteca, recibos, suscripciones, seguros…');
   } else {
-    html += `<div class="fx-list">${s.fixedItems.map(i => `
+    // Agrupados por categoría, en el orden de la lista de categorías
+    const groups = new Map();
+    for (const i of s.fixedItems) {
+      const cat = CATEGORY_NAMES.includes(i.category) ? i.category : 'Otros';
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat).push(i);
+    }
+    const ordered = CATEGORY_NAMES.filter(c => groups.has(c));
+    const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+    html += `<div class="fx-list">${ordered.map(cat => `
+      <p class="fx-group">${icon(cat)} ${cat}<span>${[
+        sum(groups.get(cat).filter(i => !i.months?.length), i => i.amount),
+        sum(groups.get(cat).filter(i => i.months?.length), i => i.amount),
+      ].map((v, k) => (v ? `${money(v)}${k ? ' trimestral' : '/mes'}` : '')).filter(Boolean).join(' + ')}</span></p>
+      ${groups.get(cat).map(i => `
       <div class="fx-row">
-        <input class="fx-name" placeholder="Ej.: Alquiler" data-item="${i.id}" data-field="name" value="${esc(i.name)}" aria-label="Nombre del gasto">
+        <div class="fx-top">
+          <input class="fx-name" placeholder="Ej.: Alquiler" data-item="${i.id}" data-field="name" value="${esc(i.name)}" aria-label="Nombre del gasto">
+          <select data-item="${i.id}" data-field="category" aria-label="Categoría">
+            ${CATEGORY_NAMES.map(c => `<option ${c === cat ? 'selected' : ''}>${c}</option>`).join('')}
+          </select>
+        </div>
+        ${i.months?.length ? `<small class="fx-tag">Solo algunos meses: ${i.months.map(m => MONTHS[m - 1]).join(', ')}</small>` : ''}
         <div class="fx-line">
           <div class="money-input"><input inputmode="decimal" placeholder="0,00" data-item="${i.id}" data-field="amount" value="${numStr(i.amount)}" aria-label="Importe"><em>€</em></div>
           <input class="fx-day" inputmode="numeric" placeholder="Día" data-item="${i.id}" data-field="day" value="${i.day ?? ''}" aria-label="Día de cargo">
           <button class="icon-btn danger" data-act="fixed-del" data-id="${i.id}" aria-label="Eliminar">✕</button>
         </div>
-      </div>`).join('')}
+      </div>`).join('')}`).join('')}
     </div>
     <button class="btn ghost block" data-act="fixed-add">+ Añadir gasto fijo</button>
-    <p class="fx-total">Total: <strong data-fixed-total>${money(C.fixedTotalOf(s))}</strong></p>
+    <p class="fx-total">Total al mes: <strong data-fixed-total>${money(C.fixedTotalOf(s))}</strong></p>
+    ${C.periodicTotalOf(s) ? `<small class="hint">Además, ${money(C.periodicTotalOf(s))} en gastos que solo se cobran algunos meses (trimestrales): se descuentan en el ciclo en que tocan.</small>` : ''}
     <small class="hint">El <b>día</b> en que te lo cobran es opcional, pero si lo pones sabré qué recibos te quedan por pagar en cada revisión.</small>`;
   }
   return html;
@@ -355,10 +383,88 @@ function viewInicio() {
       <button class="btn primary" data-act="go-revisar">Hacer revisión</button>
     </section>`;
 
+  html += budgetCard();
   html += monthCard(rec);
+  html += debtsCard();
   html += jarsSummary();
   html += historyCard();
+  html += analysisCard();
   return html;
+}
+
+// Cuánto se va cada mes en préstamos y financiación (gastos fijos de la categoría Deudas)
+function debtsCard() {
+  const s = state.settings;
+  const items = s.fixedMode === 'desglose' ? s.fixedItems.filter(i => i.category === 'Deudas') : [];
+  if (!items.length) return '';
+  const total = sum(items, i => i.amount);
+  const pct = s.salary > 0 ? Math.round((total / s.salary) * 100) : null;
+  return `<section class="card">
+    <h3>💳 Préstamos y financiación</h3>
+    <p class="big">${money(total)}<span class="unit"> /mes</span></p>
+    ${pct != null ? `<p class="muted">El <b>${pct} %</b> de tu nómina se va en cuotas.</p>
+      <div class="bar debt"><i style="width:${Math.min(100, pct)}%"></i></div>` : ''}
+    <div class="rows compact">${items.map(i => `<div class="row"><span>${esc(i.name)}</span><strong>${money(i.amount)}</strong></div>`).join('')}</div>
+    ${items.some(i => /revolving/i.test(i.name)) ? '<p class="note">El revolving sube la cuota cada vez que dispones de dinero y suele tener intereses altos. Puedes consultar en Cetelem cuánto queda pendiente.</p>' : ''}
+  </section>`;
+}
+
+// Resumen del análisis del extracto importado: media mensual por categoría
+function analysisCard() {
+  const a = state.analysis;
+  if (!a?.categories?.length) return '';
+  const vars = a.categories.filter(c => c.kind === 'variable').sort((x, y) => y.monthly - x.monthly);
+  const max = Math.max(1, ...vars.map(c => c.monthly));
+  const period = `${dateFmt(a.period.from, { month: 'short' })} – ${dateFmt(a.period.to, { month: 'short', year: 'numeric' })}`;
+  return `<section class="card">
+    <details class="analysis">
+      <summary><h3>📊 Tu análisis · ${period}</h3><span class="chev">›</span></summary>
+      <p class="muted">Media al mes de tus gastos del día a día:</p>
+      ${vars.map(c => `<div class="cat-row">
+        <span>${icon(c.category)} ${esc(c.label || c.category)}</span><strong>${money(c.monthly)}</strong>
+        <span class="bar"><i style="width:${(c.monthly / max) * 100}%"></i></span>
+      </div>`).join('')}
+      ${a.notes?.length ? `<ul class="notes">${a.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+    </details>
+  </section>`;
+}
+
+// Aplica un análisis de extracto: gastos fijos, historial para aprender, fin de semana y reglas de categorías
+function applyAnalysis(a) {
+  const items = a.fixedItems || [];
+  const monthly = sum(items.filter(i => !i.months?.length), i => i.amount);
+  const ok = confirm(`Análisis de tu cuenta (${a.period.from} → ${a.period.to}):
+
+• Tus gastos fijos se sustituirán por los ${items.length} detectados (${money(monthly)} al mes).
+• Se añadirán ${a.history.length} ciclos de nómina para que Holgura aprenda tu gasto real.
+• Se activarán las reglas para clasificar tus movimientos.${a.budgets ? `
+• Se propondrá un presupuesto por categorías (${money(sum(Object.values(a.budgets), v => v))} por ciclo).` : ''}
+
+Tus revisiones y huchas no se tocan. ¿Continuar?`);
+  if (!ok) return;
+  const s = state.settings;
+  s.fixedMode = 'desglose';
+  s.fixedItems = items.map(i => ({
+    id: S.uid(), name: i.name, amount: Number(i.amount) || 0, day: i.day ?? null, category: i.category || 'Otros',
+    ...(i.months?.length ? { months: i.months } : {}),
+  }));
+  if (a.weekend) {
+    s.fridayWeekend = Boolean(a.weekend.friday);
+    s.weekendFactor = Number(a.weekend.factor) || s.weekendFactor;
+  }
+  // Los ciclos importados van antes de los reales y sustituyen a los de un análisis anterior
+  const real = state.history.filter(h => !h.imported);
+  const firstReal = real[0]?.start;
+  const imported = (a.history || []).filter(h => !firstReal || h.end <= firstReal).map(h => ({ ...h, id: S.uid(), imported: true }));
+  state.history = [...imported, ...real];
+  state.rules = a.rules || [];
+  if (a.budgets) s.budgets = { ...a.budgets };
+  state.bankSpend = null; // las reglas han cambiado: se vuelve a calcular
+  state.analysis = { period: a.period, categories: a.categories || [], notes: a.notes || [], importedAt: C.todayStr() };
+  syncCycle();
+  tab = 'inicio';
+  commit();
+  toast('Análisis importado');
 }
 
 function monthCard(rec) {
@@ -375,9 +481,11 @@ function monthCard(rec) {
   if (rec.sobrante <= 0) {
     goalHtml = '<p class="warn">Tus gastos fijos igualan o superan tu nómina: este mes no hay margen para ahorrar.</p>';
   } else if (goal == null) {
-    goalHtml = `<div class="btn-row">
-      <button class="btn primary" data-act="goal-apply" data-amount="${rec.savings}">Fijar ${money(rec.savings)} como objetivo</button>
-      <button class="btn ghost" data-act="goal-edit">Otra cantidad</button></div>`;
+    goalHtml = rec.savings > 0
+      ? `<div class="btn-row">
+          <button class="btn primary" data-act="goal-apply" data-amount="${rec.savings}">Fijar ${money(rec.savings)} como objetivo</button>
+          <button class="btn ghost" data-act="goal-edit">Otra cantidad</button></div>`
+      : '<div class="btn-row"><button class="btn ghost" data-act="goal-edit">Fijar un objetivo de ahorro igualmente</button></div>';
   } else {
     const pct = goal > 0 ? Math.min(100, Math.max(0, (saved / goal) * 100)) : 100;
     goalHtml = `
@@ -403,7 +511,9 @@ function monthCard(rec) {
       <div class="reco">
         <p class="eyebrow">Ahorro recomendado</p>
         <p class="big">${money(rec.savings)}</p>
-        <p>Te quedarían <b>${money(rec.dayToDay)}</b> para el día a día (${planSummary(rec.plan, rec.perDay)}).</p>
+        ${rec.savings > 0
+          ? `<p>Te quedarían <b>${money(rec.dayToDay)}</b> para el día a día (${planSummary(rec.plan, rec.perDay)}).</p>`
+          : `<p>Con tu gasto habitual${rec.daily ? ` (≈ ${money(rec.daily)}/día)` : ''} este ciclo no queda margen para ahorrar. Para llegar al cobro sin tirar de la hucha, el día a día tendría que quedarse en <b>${money(rec.dayToDay)}</b> (${planSummary(rec.plan, rec.perDay)}).</p>`}
         <p class="note">${notes[rec.source]}</p>
       </div>` : ''}
       ${goalHtml}
@@ -431,9 +541,9 @@ function historyCard() {
     <h3>Ciclos anteriores</h3>
     <div class="hist">${state.history.slice(-6).reverse().map(h => `
       <div class="hist-row">
-        <span class="hist-date">${dateFmt(h.start)} → ${dateFmt(h.end)}</span>
-        <span>Día a día <b>${money(h.variable)}</b></span>
-        <span>Ahorrado <b>${money(h.saved)}</b></span>
+        <span class="hist-date">${dateFmt(h.start)} → ${dateFmt(h.end)}${h.imported ? ' <small>del extracto</small>' : ''}</span>
+        <span>Día a día <b>${money(h.variable)}</b> <small>(${money(h.variable / Math.max(1, h.days))}/día)</small></span>
+        <span>${h.saved == null ? `Fijos <b>${money(h.fixed)}</b>` : `Ahorrado <b>${money(h.saved)}</b>`}</span>
       </div>`).join('')}
     </div>
   </section>`;
@@ -743,6 +853,8 @@ function viewMiMes() {
       ${fixedEditor()}
     </section>
 
+    ${budgetSection()}
+
     <section class="card">
       <h3>Revisiones</h3>
       ${freqEditor()}
@@ -783,10 +895,103 @@ function viewMiMes() {
       <div class="btn-col">
         <button class="btn ghost block" data-act="export">⬇️ Exportar copia de seguridad</button>
         <button class="btn ghost block" data-act="import">⬆️ Importar copia de seguridad</button>
+        <button class="btn ghost block" data-act="import">📊 Importar análisis del banco</button>
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
     </section>
-    <p class="footer">Holgura · v1.3</p>`;
+    <p class="footer">Holgura · v1.5</p>`;
+}
+
+// ---------- Presupuesto por categorías ----------
+
+// Lo que hay para el día a día en este ciclo: nómina − fijos − objetivo de ahorro
+const dayToDayAvailable = () => {
+  const c = state.cycle;
+  return c ? c.income - c.fixedTotal - (Number(c.savingsGoal) || 0) : 0;
+};
+const budgetTotal = () => sum(Object.values(state.settings.budgets || {}), v => v);
+
+function budgetSummaryText() {
+  const total = budgetTotal(), avail = dayToDayAvailable();
+  const diff = avail - total;
+  return `Repartido <b>${money(total)}</b> de <b>${money(avail)}</b>${Math.abs(diff) >= 1
+    ? (diff > 0 ? ` · quedan ${money(diff)} sin repartir` : ` · <span class="neg">te pasas ${money(-diff)}</span>`) : ' ✓'}`;
+}
+
+function budgetSection() {
+  const b = state.settings.budgets || {};
+  return `<section class="card">
+    <h3>Presupuesto del día a día</h3>
+    <p class="muted">Reparte por categorías lo que te queda tras los gastos fijos. Holgura lo compara con tus movimientos del banco y te avisa si vas rápido.</p>
+    <div class="budget-list">${BUDGET_CATEGORIES.map(cat => `
+      <label class="budget-row"><span>${icon(cat)} ${cat}</span>
+        <div class="money-input"><input inputmode="decimal" placeholder="—" data-budget="${cat}" value="${numStr(b[cat] || 0)}" aria-label="Tope de ${cat}"><em>€</em></div>
+      </label>`).join('')}
+    </div>
+    <p class="fx-total" id="budget-summary">${budgetSummaryText()}</p>
+    <small class="hint">Los Bizum que te devuelven no restan del presupuesto: te dan margen extra y los verás aparte.</small>
+  </section>`;
+}
+
+function budgetStatus(spent, budget, elapsedFrac) {
+  if (spent > budget) return 'red';
+  if (spent / budget > Math.min(1, elapsedFrac + 0.15)) return 'yellow';
+  return 'green';
+}
+
+function budgetCard() {
+  const b = state.settings.budgets || {};
+  const cats = BUDGET_CATEGORIES.filter(c => b[c] > 0);
+  if (!cats.length || !state.cycle) return '';
+  const info = C.cycleInfo(state.cycle, state.settings);
+  const elapsedFrac = info.elapsed / info.totalDays;
+  const sp = state.bankSpend?.cycleId === state.cycle.id ? state.bankSpend : null;
+  const remainingDays = Math.max(1, info.remaining);
+  const totalSpent = sp ? sum(cats, c => sp.byCat[c] || 0) : 0;
+
+  const rows = cats.map(cat => {
+    const budget = b[cat], spent = sp?.byCat[cat] || 0;
+    const left = budget - spent;
+    const st = budgetStatus(spent, budget, elapsedFrac);
+    // Por categoría se entiende mejor por semana que por día (1,50 €/día en bares no dice mucho)
+    const pace = left > 0 && remainingDays > 7 ? `(≈ ${money((left / remainingDays) * 7)}/semana)` : '';
+    return `<div class="budget-item">
+      <div class="budget-top"><span>${icon(cat)} ${cat}</span><strong>${money(spent)} <small>de ${money(budget)}</small></strong></div>
+      <span class="bar budget-${st}"><i style="width:${Math.min(100, (spent / budget) * 100)}%"></i><b style="left:${Math.min(100, elapsedFrac * 100)}%"></b></span>
+      <small class="${st === 'red' ? 'neg' : ''}">${left >= 0 ? `Te quedan ${money(left)} ${pace}` : `Te has pasado ${money(-left)}`}</small>
+    </div>`;
+  }).join('');
+
+  return `<section class="card">
+    <div class="card-head"><h3>🎯 Presupuesto del ciclo</h3>${B.isReady() ? '<button class="link" data-act="spend-refresh">Actualizar</button>' : ''}</div>
+    ${sp ? `<p class="muted">Llevas <b>${money(totalSpent)}</b> de ${money(budgetTotal())} · día ${info.elapsed} de ${info.totalDays}${sp.bizumIn ? ` · <span class="pos">+${money(sp.bizumIn)} devueltos por Bizum</span>` : ''}</p>`
+      : `<p class="muted">${B.isReady() ? 'Pulsa «Actualizar» para leer tus movimientos del banco.' : 'Conecta tu banco en Mi mes para ver cuánto llevas en cada categoría.'}</p>`}
+    ${rows}
+    ${sp ? `<p class="note">Actualizado ${new Date(sp.at).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}. La rayita marca hasta dónde «tocaría» llevar gastado hoy.</p>` : ''}
+  </section>`;
+}
+
+// Lee los movimientos del ciclo, guarda el gasto por categoría y avisa de lo que va rápido
+async function refreshSpend({ silent = false, list = null } = {}) {
+  const c = state.cycle;
+  if (!c || !B.isReady()) return;
+  try {
+    const txs = list || (await B.transactions(c.start)).transactions.map(t => ({ ...t, ...categorize(t, state.rules) }));
+    state.bankSpend = { cycleId: c.id, at: new Date().toISOString(), ...spendByCategory(txs) };
+    persist();
+    const b = state.settings.budgets || {};
+    const info = C.cycleInfo(c, state.settings);
+    const alerts = BUDGET_CATEGORIES.filter(cat => b[cat] > 0)
+      .map(cat => ({ cat, st: budgetStatus(state.bankSpend.byCat[cat] || 0, b[cat], info.elapsed / info.totalDays) }))
+      .filter(a => a.st !== 'green');
+    if (alerts.length && !list) {
+      const worst = alerts.find(a => a.st === 'red') || alerts[0];
+      toast(worst.st === 'red' ? `Te has pasado en ${worst.cat}` : `Ojo: vas rápido en ${worst.cat}`);
+    } else if (!silent && !list) toast('Presupuesto actualizado');
+    rerenderIf('inicio');
+  } catch (err) {
+    if (!silent) bankError(err);
+  }
 }
 
 // ---------- Conexión con el banco ----------
@@ -891,22 +1096,36 @@ async function openTransactions() {
   const c = state.cycle;
   openSheet('Movimientos', '<p class="muted center">Leyendo tus movimientos del banco…</p>');
   try {
-    const { transactions: list } = await B.transactions(c.start);
+    const { transactions } = await B.transactions(c.start);
+    const list = transactions.map(t => ({ ...t, ...categorize(t, state.rules) }));
+    refreshSpend({ list }); // de paso, actualiza el presupuesto
     const income = sum(list.filter(t => t.amount > 0), t => t.amount);
     const spent = -sum(list.filter(t => t.amount < 0), t => t.amount);
     const days = [...new Set(list.map(t => t.date))];
+
+    // Salidas por categoría (de mayor a menor)
+    const byCat = new Map();
+    for (const t of list.filter(x => x.amount < 0)) byCat.set(t.category, (byCat.get(t.category) || 0) - t.amount);
+    const cats = [...byCat].sort((a, b) => b[1] - a[1]);
+    const max = Math.max(1, ...cats.map(([, v]) => v));
+
     openSheet('Movimientos', `
       <p class="muted center">Desde el ${dayFmt(c.start)} · ${list.length} movimientos</p>
       <div class="stats two">
         <div><span>Entradas</span><strong class="pos">+ ${money(income)}</strong></div>
         <div><span>Salidas</span><strong class="neg">− ${money(spent)}</strong></div>
       </div>
+      ${cats.length ? `<h3>En qué se ha ido</h3>
+        ${cats.map(([cat, v]) => `<div class="cat-row">
+          <span>${icon(cat)} ${cat}</span><strong>${money(v)}</strong>
+          <span class="bar"><i style="width:${(v / max) * 100}%"></i></span>
+        </div>`).join('')}` : ''}
       ${list.length ? days.map(d => `
         <h3>${d ? dayFmt(d) : 'Sin fecha'}</h3>
         <div class="list">${list.filter(t => t.date === d).map(t => `
           <div class="list-row static">
-            <span class="mv ${t.amount >= 0 ? 'in' : 'out'}">${t.amount >= 0 ? '＋' : '−'}</span>
-            <span class="grow tx-desc">${esc(t.description)}${t.pending ? '<small>Pendiente</small>' : t.counterparty && t.counterparty !== t.description ? `<small>${esc(t.counterparty)}</small>` : ''}</span>
+            <span class="mv ${t.amount >= 0 ? 'in' : 'out'}">${icon(t.category)}</span>
+            <span class="grow tx-desc">${esc(t.description)}<small>${esc(t.label || t.category)}${t.pending ? ' · pendiente' : ''}</small></span>
             <strong class="${t.amount < 0 ? 'neg' : 'pos'}">${t.amount < 0 ? '− ' : '+ '}${money(Math.abs(t.amount))}</strong>
           </div>`).join('')}</div>`).join('') : '<p class="muted center">No hay movimientos en este ciclo.</p>'}`);
   } catch (err) {
@@ -1022,7 +1241,7 @@ const actions = {
 
   'fixed-add': () => {
     const id = S.uid();
-    state.settings.fixedItems.push({ id, name: '', amount: 0, day: null });
+    state.settings.fixedItems.push({ id, name: '', amount: 0, day: null, category: 'Otros' });
     syncCycle();
     commit();
     document.querySelector(`[data-item="${id}"][data-field="name"]`)?.focus();
@@ -1133,6 +1352,11 @@ const actions = {
     }
   },
   'bank-tx': openTransactions,
+  'spend-refresh': async el => {
+    el.textContent = 'Leyendo…';
+    await refreshSpend();
+    render();
+  },
 };
 
 document.addEventListener('click', e => {
@@ -1162,6 +1386,7 @@ document.addEventListener('change', e => {
     if (!item) return;
     const f = el.dataset.field;
     if (f === 'name') item.name = el.value.trim();
+    if (f === 'category') { item.category = el.value; syncCycle(); persist(); return render(); }
     if (f === 'amount') item.amount = Math.max(0, parseMoney(el.value) || 0);
     if (f === 'day') { const d = parseInt(el.value, 10); item.day = d >= 1 && d <= 31 ? d : null; el.value = item.day ?? ''; }
     syncCycle();
@@ -1171,12 +1396,21 @@ document.addEventListener('change', e => {
     if (el.dataset.cbind === 'start' && el.value) state.cycle.start = el.value;
     if (el.dataset.cbind === 'startBalance') { const v = parseMoney(el.value); if (Number.isFinite(v)) state.cycle.startBalance = v; }
     persist();
+  } else if (el.dataset.budget) {
+    const v = Math.max(0, parseMoney(el.value) || 0);
+    state.settings.budgets = { ...(state.settings.budgets || {}), [el.dataset.budget]: v };
+    if (!v) delete state.settings.budgets[el.dataset.budget];
+    persist();
+    const summary = $('#budget-summary');
+    if (summary) summary.innerHTML = budgetSummaryText();
   } else if (el.id === 'bk-account') {
     B.saveConfig({ account: el.value || null });
     toast(el.value ? 'Cuenta elegida' : 'Elige una cuenta para traer el saldo');
   } else if (el.id === 'import-file' && el.files[0]) {
     el.files[0].text().then(text => {
       try {
+        const parsed = JSON.parse(text);
+        if (parsed?.type === 'holgura-analisis') return applyAnalysis(parsed);
         const data = S.importData(text);
         if (!confirm('Se sustituirán los datos actuales por los de la copia. ¿Continuar?')) return;
         state = data;
@@ -1214,6 +1448,13 @@ document.addEventListener('visibilitychange', () => {
 
 render();
 if (B.getConfig().password) loadBankStatus();
+
+// Si hay presupuesto y banco conectado, se actualiza solo al abrir la app (como mucho cada 3 horas)
+const spendAge = state.bankSpend ? Date.now() - new Date(state.bankSpend.at) : Infinity;
+if (state.setup && B.isReady() && Object.keys(state.settings.budgets || {}).length
+    && (state.bankSpend?.cycleId !== state.cycle?.id || spendAge > 3 * 3600 * 1000)) {
+  refreshSpend({ silent: true });
+}
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   // Cuando llega una versión nueva se recarga sola, salvo que estés escribiendo algo

@@ -22,12 +22,16 @@ export function defaultState() {
       weekendMode: 'auto',      // 'auto' (lo aprende de las revisiones) | 'manual'
       weekendFactor: 2,         // un día de fin de semana gasta como N días entre semana (en auto, punto de partida)
       fridayWeekend: false,
+      budgets: {},              // tope por categoría del día a día para cada ciclo { 'Supermercado': 150, … }
     },
     cycle: null,                // { id, start, startBalance, income, fixedTotal, fixedItems, savingsGoal }
     checkins: [],               // { id, cycleId, date, balance, pendingFixed, pendingIds, extraIncome }
     history: [],                // ciclos cerrados (ver calc.closeCycle)
     jars: [],                   // { id, name, emoji, goal }
     moves: [],                  // { id, jarId, date, type: 'in'|'out', amount, note, account, cycleId }
+    rules: [],                  // reglas personales para clasificar movimientos { match, amount?, category, label? }
+    analysis: null,             // resumen del análisis importado { period, categories, notes, importedAt }
+    bankSpend: null,            // último gasto por categoría leído del banco { cycleId, at, byCat, bizumIn }
   };
 }
 

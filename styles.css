@@ -142,6 +142,37 @@ header.top .sub { color: var(--muted); margin: 4px 0 0; font-size: 15px; }
 .allow-grid strong em { font-style: normal; font-size: 13px; font-weight: 500; color: var(--muted); margin-left: 2px; }
 
 .pos { color: var(--green); }
+.budget-list { display: grid; gap: 6px; margin: 10px 0; }
+.budget-row { display: grid; grid-template-columns: 1fr 112px; align-items: center; gap: 10px; font-size: 15px; }
+.budget-row input { padding: 9px 30px 9px 12px; text-align: right; }
+.budget-item { margin: 14px 0; }
+.budget-top { display: flex; justify-content: space-between; gap: 8px; font-size: 15px; margin-bottom: 6px; }
+.budget-top strong { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.budget-top small { display: inline; margin: 0; font-weight: 400; }
+.budget-item > small { margin-top: 4px; }
+.bar { position: relative; }
+.bar b { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); opacity: .35; border-radius: 2px; }
+.bar.budget-green i { background: var(--green); }
+.bar.budget-yellow i { background: var(--yellow); }
+.bar.budget-red i { background: var(--red); }
+.unit { font-size: 16px; font-weight: 500; color: var(--muted); }
+.bar.debt i { background: var(--red); }
+.fx-group { display: flex; justify-content: space-between; font-weight: 650; margin: 10px 2px 0; }
+.fx-group span { color: var(--muted); font-weight: 500; font-size: 14px; }
+.fx-top { display: grid; grid-template-columns: 1fr 120px; gap: 6px; }
+.fx-top select { background-color: var(--card); padding: 10px 28px 10px 10px; font-size: 14px; }
+.fx-tag { margin: 0 4px; }
+.cat-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; margin: 8px 0; font-size: 15px; }
+.cat-row .bar { grid-column: 1 / -1; height: 6px; }
+.cat-row strong { font-variant-numeric: tabular-nums; }
+details.analysis summary { display: flex; justify-content: space-between; align-items: center; cursor: pointer; list-style: none; }
+details.analysis summary::-webkit-details-marker { display: none; }
+details.analysis summary h3 { margin: 0; }
+details.analysis[open] summary .chev { transform: rotate(90deg); }
+details.analysis .chev { transition: transform .2s; }
+.notes { padding-left: 18px; margin: 12px 0 0; color: var(--muted); font-size: 14px; }
+.notes li { margin-bottom: 6px; }
+.hist-date small { display: inline; font-weight: 500; color: var(--muted); }
 .stats.two { grid-template-columns: 1fr 1fr; margin-bottom: 4px; }
 .stats.two div { background: var(--card); }
 .bank-btn { margin-top: -4px; }
