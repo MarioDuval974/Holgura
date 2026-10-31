@@ -33,6 +33,7 @@ export function defaultState() {
     rules: [],                  // reglas personales para clasificar movimientos { match, amount?, category, label? }
     analysis: null,             // resumen del análisis importado { period, categories, notes, importedAt }
     bankSpend: null,            // último gasto por categoría leído del banco { cycleId, at, byCat, bizumIn }
+    lastBalance: null,          // último saldo informado (escrito o traído del banco) { amount, at, source: 'manual'|'bank' }
   };
 }
 

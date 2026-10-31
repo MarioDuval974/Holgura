@@ -566,6 +566,7 @@ function viewRevisar() {
   const c = state.cycle, s = state.settings, today = C.todayStr();
   const next = nextDue();
   const pend = pendingDefaults();
+  const last = lastBalance();
   const [y, m, d] = today.split('-').map(Number);
   const showEarly = s.cycleType === 'natural' && d >= Math.min(s.payDay, 28) - 4;
 
@@ -573,7 +574,7 @@ function viewRevisar() {
 
   html += `<section class="card">
     <h3>Nueva revisión</h3>
-    ${moneyField('Saldo actual de tu cuenta', 'id="ck-balance"', '', B.isReady() ? '<span id="bk-note">Escríbelo o tráelo de tu banco.</span>' : 'El que ves ahora mismo en la app de tu banco.')}
+    ${moneyField('Saldo actual de tu cuenta', 'id="ck-balance"', last ? inputNum(last.amount) : '', `<span id="bk-note">${balanceNote(last)}</span>`)}
     ${B.isReady() ? '<button class="btn ghost block bank-btn" data-act="bank-balance">🏦 Traer saldo del banco</button>' : ''}
     ${pend.mode === 'items' ? `
       <div class="field"><span>Gastos fijos que <b>ya</b> te han cobrado</span>
@@ -623,6 +624,27 @@ function viewRevisar() {
   return html;
 }
 
+// Último saldo conocido: el último que escribiste o trajiste del banco (o el de la última revisión)
+function lastBalance() {
+  if (state.lastBalance) return state.lastBalance;
+  const k = [...state.checkins].sort((a, b) => a.date.localeCompare(b.date)).at(-1);
+  return k ? { amount: k.balance, at: `${k.date}T12:00:00`, source: 'manual' } : null;
+}
+const inputNum = n => String(Math.round(n * 100) / 100).replace('.', ',');
+
+function balanceNote(last) {
+  if (!last) return B.isReady() ? 'Escríbelo o tráelo de tu banco.' : 'El que ves ahora mismo en la app de tu banco.';
+  const at = new Date(last.at);
+  const when = isNaN(at) ? '' : at.toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return `Último saldo ${last.source === 'bank' ? 'traído de tu banco' : 'informado'}${when ? ` (${when})` : ''}. ${B.isReady() ? 'Actualízalo o tráelo de nuevo del banco.' : 'Cámbialo si ha variado.'}`;
+}
+
+function setLastBalance(amount, source, at = new Date().toISOString()) {
+  if (!Number.isFinite(amount)) return;
+  state.lastBalance = { amount, at, source };
+  persist();
+}
+
 function chargedText(charged) {
   const c = state.cycle;
   return `Cobrados: ${money(sum(charged, i => i.amount))} de ${money(c.fixedTotal)}.`;
@@ -646,6 +668,7 @@ function saveCheckin() {
     extraIncome: Math.max(0, parseMoney($('#ck-extra')?.value) || 0),
     earlyIncome: $('#ck-early')?.checked ? Number(state.settings.salary) || 0 : 0,
   };
+  if (state.lastBalance?.amount !== balance) setLastBalance(balance, 'manual');
   // Una revisión por día: la nueva sustituye a la anterior
   state.checkins = state.checkins.filter(x => !(x.cycleId === c.id && x.date === date));
   state.checkins.push(k);
@@ -906,7 +929,7 @@ function viewMiMes() {
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
     </section>
-    <p class="footer">Holgura · v1.8</p>`;
+    <p class="footer">Holgura · v1.9</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -1366,10 +1389,10 @@ const actions = {
     el.textContent = 'Consultando tu banco…';
     try {
       const b = await B.balance();
-      $('#ck-balance').value = String(Math.round(b.amount * 100) / 100).replace('.', ',');
-      const at = new Date(b.at);
+      $('#ck-balance').value = inputNum(b.amount);
+      setLastBalance(b.amount, 'bank');
       const note = $('#bk-note');
-      if (note) note.textContent = `Saldo disponible según tu banco${isNaN(at) ? '' : ` (${at.toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })})`}. Puedes corregirlo antes de guardar.`;
+      if (note) note.textContent = `${balanceNote(state.lastBalance)} Puedes corregirlo antes de guardar.`;
       toast('Saldo traído del banco');
     } catch (err) {
       bankError(err);
@@ -1423,6 +1446,10 @@ document.addEventListener('change', e => {
     if (el.dataset.cbind === 'start' && el.value) state.cycle.start = el.value;
     if (el.dataset.cbind === 'startBalance') { const v = parseMoney(el.value); if (Number.isFinite(v)) state.cycle.startBalance = v; }
     persist();
+  } else if (el.id === 'ck-balance') {
+    // Se recuerda aunque no guardes la revisión: al volver a la app sigue ahí
+    const v = parseMoney(el.value);
+    if (Number.isFinite(v) && v !== state.lastBalance?.amount) setLastBalance(v, 'manual');
   } else if (el.dataset.fixedId) {
     const ids = [...document.querySelectorAll('[data-fixed-id]')].filter(x => x.checked).map(x => x.dataset.fixedId);
     const counter = $('#ck-charged');
@@ -1454,6 +1481,13 @@ document.addEventListener('change', e => {
       }
     });
   }
+});
+
+// El saldo también se guarda mientras escribes (en el móvil puedes salir de la app sin "salir" del campo)
+document.addEventListener('input', e => {
+  if (e.target.id !== 'ck-balance') return;
+  const v = parseMoney(e.target.value);
+  if (Number.isFinite(v)) { state.lastBalance = { amount: v, at: new Date().toISOString(), source: 'manual' }; persist(); }
 });
 
 // ---------- Render ----------
