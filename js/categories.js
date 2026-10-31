@@ -85,18 +85,22 @@ export function categorize(tx, rules = []) {
   // El banco manda los nombres como "DANIEL;CADENAS;GUERRERO": se cambia el ; por espacio para que las reglas coincidan
   const text = `${tx.description || ''} ${tx.counterparty || ''} ${tx.code || ''} ${tx.note || ''}`.replace(/;/g, ' ').toUpperCase();
   const abs = Math.round(Math.abs(Number(tx.amount) || 0) * 100) / 100;
-  // Un Bizum seguro va primero: así su concepto ("Berlin", "cena"…) no se confunde con un comercio de tus reglas
-  if (surelyBizum(tx)) return { category: 'Bizum', label: tx.amount > 0 ? 'Bizum recibido' : 'Bizum enviado', fixed: false };
-  for (const r of rules) {
+  const matches = r => {
     try {
-      if (new RegExp(r.match, 'i').test(text) && (r.amount == null || Math.abs(r.amount - abs) < 0.005) && (r.min == null || abs >= r.min)) {
-        return {
-          category: r.category, label: r.label || null, fixed: Boolean(r.fixed) || FIXED_CATEGORIES.includes(r.category),
-          charge: r.charge || null, // a qué gastos fijos "según banco" corresponde (p. ej. 80 € → psicóloga 60 + peluquería 20)
-        };
-      }
-    } catch { /* regla mal escrita: se ignora */ }
-  }
+      return new RegExp(r.match, 'i').test(text)
+        && (r.amount == null || Math.abs(r.amount - abs) < 0.005) && (r.min == null || abs >= r.min)
+        && (r.dir == null || (r.dir === 'in') === (tx.amount > 0)); // dir: solo dinero que entra ('in') o que sale ('out')
+    } catch { return false; } // regla mal escrita: se ignora
+  };
+  const result = r => ({
+    category: r.category, label: r.label || null, fixed: Boolean(r.fixed) || FIXED_CATEGORIES.includes(r.category),
+    charge: r.charge || null, // a qué gastos fijos "según banco" corresponde (p. ej. 80 € → psicóloga 60 + peluquería 20)
+  });
+  // Reglas "first": van incluso antes que el Bizum (p. ej. el Bizum de las plataformas, que se reparte a Spotify y Netflix)
+  for (const r of rules) if (r.first && matches(r)) return result(r);
+  // Un Bizum seguro va después: así su concepto ("Berlin", "cena"…) no se confunde con un comercio de tus reglas
+  if (surelyBizum(tx)) return { category: 'Bizum', label: tx.amount > 0 ? 'Bizum recibido' : 'Bizum enviado', fixed: false };
+  for (const r of rules) if (!r.first && matches(r)) return result(r);
   // Antes que las reglas por palabras: el concepto de un Bizum ("cena en el bar") no debe confundirse con un comercio
   if (looksLikeBizum(tx)) return { category: 'Bizum', label: tx.amount > 0 ? 'Bizum recibido' : 'Bizum enviado', fixed: false };
   for (const [category, re] of DEFAULT_RULES) {
@@ -110,13 +114,15 @@ export function categorize(tx, rules = []) {
 
 // Lo gastado en el día a día por categoría y lo que te han devuelto por Bizum.
 // Las devoluciones (p. ej. el descuento de Waylet) restan de su propia categoría.
-// Reparte un cargo entre gastos fijos: { psicologa: 60, peluqueria: 20 }, '*' = todo el importe, 'rest' = lo que sobre
+// Reparte un importe entre gastos fijos: { psicologa: 60, peluqueria: 20 }, '*' = todo, 'rest' = lo que sobre,
+// '50%' = la mitad (p. ej. el Bizum de las plataformas: mitad Spotify, mitad Netflix)
 export function splitCharge(charge, abs) {
   const out = {};
   let used = 0;
   for (const [k, v] of Object.entries(charge)) if (typeof v === 'number') { out[k] = v; used += v; }
   for (const [k, v] of Object.entries(charge)) {
     if (v === '*') out[k] = abs;
+    else if (typeof v === 'string' && v.endsWith('%')) out[k] = Math.round(abs * parseFloat(v)) / 100;
     else if (v === 'rest') out[k] = Math.max(0, Math.round((abs - used) * 100) / 100);
   }
   return out;
@@ -129,8 +135,10 @@ export function spendByCategory(list) {
   let bizumIn = 0;
   for (const t of list) {
     if (t.fixed) {
-      if (t.charge && t.amount < 0) {
-        for (const [key, amount] of Object.entries(splitCharge(t.charge, -t.amount))) fixedCharges.push({ date: t.date, key, amount });
+      // Lo que sale suma al fijo; lo que entra (te devuelven tu parte) resta
+      if (t.charge && t.amount) {
+        const sign = t.amount < 0 ? 1 : -1;
+        for (const [key, amount] of Object.entries(splitCharge(t.charge, Math.abs(t.amount)))) fixedCharges.push({ date: t.date, key, amount: sign * amount });
       }
       continue;
     }

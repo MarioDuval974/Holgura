@@ -34,6 +34,7 @@ export function defaultState() {
     analysis: null,             // resumen del análisis importado { period, categories, notes, importedAt }
     bankSpend: null,            // último gasto por categoría leído del banco { cycleId, at, byCat, bizumIn }
     lastBalance: null,          // último saldo informado (escrito o traído del banco) { amount, at, source: 'manual'|'bank' }
+    adjustments: [],            // movimientos en los que solo cuenta una parte { key, date, amount, counted, note }
   };
 }
 

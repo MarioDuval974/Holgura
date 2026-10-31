@@ -272,19 +272,23 @@ export function trackedFixed(state, upTo = '9999-12-31') {
   const c = state.cycle, sp = state.bankSpend;
   const items = (c?.fixedItems || []).filter(i => i.key);
   if (!items.length || sp?.cycleId !== c.id || !sp.fixedCharges) return null;
-  const actual = {};
+  const paid = {}, back = {};
   for (const f of sp.fixedCharges) {
-    if (f.date >= c.start && f.date <= upTo) actual[f.key] = (actual[f.key] || 0) + f.amount;
+    if (f.date < c.start || f.date > upTo) continue;
+    if (f.amount >= 0) paid[f.key] = (paid[f.key] || 0) + f.amount;
+    else back[f.key] = (back[f.key] || 0) - f.amount; // te han devuelto tu parte (p. ej. el Bizum de las plataformas)
   }
-  const byId = {};
+  const byId = {}, paidById = {}, backById = {};
   let charged = 0, over = 0;
   for (const i of items) {
-    const a = round2(actual[i.key] || 0);
+    const a = round2((paid[i.key] || 0) - (back[i.key] || 0));
     byId[i.id] = a;
+    paidById[i.id] = round2(paid[i.key] || 0);
+    backById[i.id] = round2(back[i.key] || 0);
     charged += a;
     over += Math.max(0, a - i.amount); // p. ej. una segunda sesión de psicóloga: el fijo de este ciclo sube
   }
-  return { byId, ids: new Set(items.map(i => i.id)), charged: round2(charged), over: round2(over) };
+  return { byId, paidById, backById, ids: new Set(items.map(i => i.id)), charged: round2(charged), over: round2(over) };
 }
 
 // Gastos fijos del ciclo contando lo que se haya pasado de lo previsto en los "según banco"
@@ -305,7 +309,10 @@ export function analyze(state, checkin) {
   const extra = sum(cycleCheckins, k => k.extraIncome) + (Number(checkin.extraIncome) || 0);
   const moved = netToJars(state, c.id, checkin.date);
   const saved = netToJars(state, c.id, checkin.date, true);
-  let pendingFixed = Number(checkin.pendingFixed) || 0;
+  // Lo pendiente se recalcula con los importes actuales (por si cambiaste algún fijo después de la revisión)
+  let pendingFixed = c.fixedItems?.length && Array.isArray(checkin.pendingIds)
+    ? sum(c.fixedItems.filter(i => checkin.pendingIds.includes(i.id)), i => i.amount)
+    : Number(checkin.pendingFixed) || 0;
   let fixedCharged = c.fixedTotal - pendingFixed;
   let fixedTotal = c.fixedTotal;
   // Los fijos "según banco" no usan el check: cuenta lo realmente retirado hasta el día de la revisión
@@ -320,7 +327,10 @@ export function analyze(state, checkin) {
   const balance = checkin.balance - (Number(checkin.earlyIncome) || 0);
 
   // Lo gastado en el día a día = lo que ha bajado la cuenta, sin contar fijos, huchas ni ingresos extra
-  const variable = c.startBalance - balance - fixedCharged - moved + extra;
+  // Ajustes: de algún cargo solo cuenta una parte (p. ej. 27 € de lotería, 7 € con efectivo de tu madre)
+  const notMine = sum((state.adjustments || []).filter(a => a.date >= c.start && a.date <= checkin.date),
+    a => Math.abs(a.amount) - a.counted);
+  const variable = c.startBalance - balance - fixedCharged - moved + extra - notMine;
   const spent = Math.max(0, variable);
   const observedDaily = spent / elapsed;
 

@@ -618,9 +618,10 @@ function viewRevisar() {
       <div class="field"><span>Gastos fijos que <b>ya</b> te han cobrado</span>
         <small class="hint">Marca cada uno cuando veas el cargo en tu banco. <b id="ck-charged">${chargedText(c.fixedItems.filter(i => !pend.ids.includes(i.id)))}</b></small>
         <div class="checks">${c.fixedItems.map(i => tracked?.ids.has(i.id) ? `
-          <div class="check auto"><span class="auto-mark ${tracked.byId[i.id] ? 'on' : ''}">${tracked.byId[i.id] ? '✓' : ''}</span>
-            <span>${esc(i.name || 'Sin nombre')}<small>Según tu banco</small></span>
-            <em>${tracked.byId[i.id] ? `${money(tracked.byId[i.id])} de ${money(i.amount)}` : `0 € de ${money(i.amount)}`}</em></div>` : `
+          <div class="check auto"><span class="auto-mark ${tracked.paidById[i.id] ? 'on' : ''}">${tracked.paidById[i.id] ? '✓' : ''}</span>
+            <span>${esc(i.name || 'Sin nombre')}<small>Según tu banco${tracked.backById[i.id]
+              ? ` · ${tracked.paidById[i.id] ? `${money(tracked.paidById[i.id])} pagado − ` : ''}${money(tracked.backById[i.id])} devuelto` : ''}</small></span>
+            <em>${money(Math.max(0, tracked.byId[i.id]))} de ${money(i.amount)}</em></div>` : `
           <label class="check"><input type="checkbox" data-fixed-id="${i.id}" ${pend.ids.includes(i.id) ? '' : 'checked'}>
             <span>${esc(i.name || 'Sin nombre')}</span><em>${money(i.amount)}${i.day ? ` · día ${i.day}` : ''}</em></label>`).join('')}
         </div>
@@ -975,7 +976,7 @@ function viewMiMes() {
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
     </section>
-    <p class="footer">Holgura · v2.8</p>`;
+    <p class="footer">Holgura · v3.0</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -1084,7 +1085,7 @@ async function refreshSpend({ silent = false, list = null } = {}) {
   const c = state.cycle;
   if (!c || !B.isReady()) return;
   try {
-    const txs = list || (await B.transactions(c.start)).transactions.map(t => ({ ...t, ...categorize(t, state.rules) }));
+    const txs = list || applyAdjustments((await B.transactions(c.start)).transactions.map(t => ({ ...t, ...categorize(t, state.rules) })));
     state.bankSpend = { cycleId: c.id, at: new Date().toISOString(), ...spendByCategory(txs) };
     persist();
     const b = state.settings.budgets || {};
@@ -1202,13 +1203,24 @@ async function startBankConnect(bank) {
 
 let txCache = []; // últimos movimientos mostrados (para ver el detalle de uno)
 
+// Ajustes: de un cargo solo cuenta una parte como gasto tuyo (p. ej. 27 € de lotería, 7 € con efectivo de tu madre)
+const adjKey = t => `${t.date}|${Math.round(Number(t.amount) * 100) / 100}`;
+function applyAdjustments(list) {
+  return list.map(t => {
+    const a = (state.adjustments || []).find(x => x.key === adjKey(t));
+    return a ? { ...t, original: t.amount, amount: Math.sign(t.amount) * a.counted, adjusted: a } : t;
+  });
+}
+
 // Todo lo que manda el banco de un movimiento: sirve para ver por qué se clasificó así
 function openTxDetail(i) {
   const t = txCache[i];
   if (!t) return;
   const row = (label, value) => (value || value === 0 ? `<div class="row"><span>${label}</span><strong class="wrap">${esc(value)}</strong></div>` : '');
+  const amount = t.original ?? t.amount;
   openSheet('Detalle del movimiento', `
-    <p class="big center ${t.amount < 0 ? 'neg' : 'pos'}">${t.amount < 0 ? '− ' : '+ '}${money(Math.abs(t.amount))}</p>
+    <p class="big center ${amount < 0 ? 'neg' : 'pos'}">${amount < 0 ? '− ' : '+ '}${money(Math.abs(amount))}</p>
+    ${t.adjusted ? `<p class="muted center">Cuenta como gasto tuyo: <b>${money(t.adjusted.counted)}</b>${t.adjusted.note ? ` · ${esc(t.adjusted.note)}` : ''}</p>` : ''}
     <div class="rows compact">
       ${row('Categoría', `${icon(t.category)} ${t.label || t.category}${t.fixed ? ' (gasto fijo)' : ''}`)}
       ${row('Fecha', t.date ? dayFmt(t.date) : '')}
@@ -1230,10 +1242,11 @@ async function openTransactions() {
   openSheet('Movimientos', '<p class="muted center">Leyendo tus movimientos del banco…</p>');
   try {
     const { transactions } = await B.transactions(c.start);
-    const list = transactions.map(t => ({ ...t, ...categorize(t, state.rules) }));
+    const list = applyAdjustments(transactions.map(t => ({ ...t, ...categorize(t, state.rules) })));
     refreshSpend({ list }); // de paso, actualiza el presupuesto
-    const income = sum(list.filter(t => t.amount > 0), t => t.amount);
-    const spent = -sum(list.filter(t => t.amount < 0), t => t.amount);
+    const raw = t => t.original ?? t.amount; // lo que movió el banco (sin ajustes)
+    const income = sum(list.filter(t => raw(t) > 0), raw);
+    const spent = -sum(list.filter(t => raw(t) < 0), raw);
     const days = [...new Set(list.map(t => t.date))];
 
     // Salidas por categoría (de mayor a menor); las devoluciones restan de su categoría (p. ej. Waylet)
@@ -1261,8 +1274,8 @@ async function openTransactions() {
         <div class="list">${list.filter(t => t.date === d).map(t => `
           <button class="list-row" data-act="tx-detail" data-i="${list.indexOf(t)}">
             <span class="mv ${t.amount >= 0 ? 'in' : 'out'}">${icon(t.category)}</span>
-            <span class="grow tx-desc">${esc(t.description)}<small>${esc(t.label || t.category)}${t.pending ? ' · pendiente' : ''}</small></span>
-            <strong class="${t.amount < 0 ? 'neg' : 'pos'}">${t.amount < 0 ? '− ' : '+ '}${money(Math.abs(t.amount))}</strong>
+            <span class="grow tx-desc">${esc(t.description)}<small>${esc(t.label || t.category)}${t.adjusted ? ` · cuenta ${money(t.adjusted.counted)}` : ''}${t.pending ? ' · pendiente' : ''}</small></span>
+            <strong class="${raw(t) < 0 ? 'neg' : 'pos'}">${raw(t) < 0 ? '− ' : '+ '}${money(Math.abs(raw(t)))}</strong>
           </button>`).join('')}</div>`).join('') : '<p class="muted center">No hay movimientos en este ciclo.</p>'}`);
     txCache = list;
   } catch (err) {
