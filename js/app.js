@@ -965,7 +965,7 @@ function viewMiMes() {
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
     </section>
-    <p class="footer">Holgura · v2.2</p>`;
+    <p class="footer">Holgura · v2.3</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -1176,6 +1176,31 @@ async function startBankConnect(bank) {
   }
 }
 
+let txCache = []; // últimos movimientos mostrados (para ver el detalle de uno)
+
+// Todo lo que manda el banco de un movimiento: sirve para ver por qué se clasificó así
+function openTxDetail(i) {
+  const t = txCache[i];
+  if (!t) return;
+  const row = (label, value) => (value || value === 0 ? `<div class="row"><span>${label}</span><strong class="wrap">${esc(value)}</strong></div>` : '');
+  openSheet('Detalle del movimiento', `
+    <p class="big center ${t.amount < 0 ? 'neg' : 'pos'}">${t.amount < 0 ? '− ' : '+ '}${money(Math.abs(t.amount))}</p>
+    <div class="rows compact">
+      ${row('Categoría', `${icon(t.category)} ${t.label || t.category}${t.fixed ? ' (gasto fijo)' : ''}`)}
+      ${row('Fecha', t.date ? dayFmt(t.date) : '')}
+      ${row('Descripción / concepto', t.description)}
+      ${row('Ordenante o beneficiario', t.counterparty)}
+      ${row('Código de operación', t.code)}
+      ${row('Nota del banco', t.note)}
+      ${row('Referencia', t.reference)}
+      ${row('Código de comercio (MCC)', t.mcc)}
+      ${row('Cuenta de contrapartida', t.counterAccount ? 'Sí' : 'No')}
+      ${row('Estado', t.pending ? 'Pendiente' : 'Contabilizado')}
+    </div>
+    <p class="note">Si está mal clasificado, haz una captura de esta pantalla y pásamela para ajustar las reglas.</p>
+    <button class="btn ghost block" data-act="bank-tx">‹ Volver a los movimientos</button>`);
+}
+
 async function openTransactions() {
   const c = state.cycle;
   openSheet('Movimientos', '<p class="muted center">Leyendo tus movimientos del banco…</p>');
@@ -1210,11 +1235,12 @@ async function openTransactions() {
       ${list.length ? days.map(d => `
         <h3>${d ? dayFmt(d) : 'Sin fecha'}</h3>
         <div class="list">${list.filter(t => t.date === d).map(t => `
-          <div class="list-row static">
+          <button class="list-row" data-act="tx-detail" data-i="${list.indexOf(t)}">
             <span class="mv ${t.amount >= 0 ? 'in' : 'out'}">${icon(t.category)}</span>
             <span class="grow tx-desc">${esc(t.description)}<small>${esc(t.label || t.category)}${t.pending ? ' · pendiente' : ''}</small></span>
             <strong class="${t.amount < 0 ? 'neg' : 'pos'}">${t.amount < 0 ? '− ' : '+ '}${money(Math.abs(t.amount))}</strong>
-          </div>`).join('')}</div>`).join('') : '<p class="muted center">No hay movimientos en este ciclo.</p>'}`);
+          </button>`).join('')}</div>`).join('') : '<p class="muted center">No hay movimientos en este ciclo.</p>'}`);
+    txCache = list;
   } catch (err) {
     closeSheet();
     bankError(err);
@@ -1439,6 +1465,7 @@ const actions = {
     }
   },
   'bank-tx': openTransactions,
+  'tx-detail': el => openTxDetail(Number(el.dataset.i)),
   'spend-refresh': async el => {
     el.textContent = 'Leyendo…';
     await refreshSpend();

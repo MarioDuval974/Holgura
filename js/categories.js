@@ -61,8 +61,21 @@ const DEFAULT_RULES = [
 
 // Clasifica un movimiento {description, counterparty, amount}. Devuelve { category, label, fixed }.
 // fixed = ya está contado en los gastos fijos (p. ej. el efectivo de la psicóloga), así no se cuenta dos veces.
+// Nombre de empresa (no de persona): S.L., S.A., banco, etc.
+const COMPANY = /\b(S\.?\s?L\.?U?|S\.?\s?A\.?U?|S\.?\s?COOP|SPAIN|ESPA[ÑN]A|BANCO|BANK|LTD|GMBH|INC|SAS|SRL|SOCIEDAD|AYUNTAMIENTO|AJUNTAMENT|TESORERIA|AGENCIA)\b/;
+
+// Un Bizum por la conexión del banco trae como descripción el concepto que escribe la otra persona.
+// Se reconoce por: la palabra BIZUM en cualquier campo, o una transferencia de/hacia una persona sin comercio de tarjeta.
+export function looksLikeBizum(tx) {
+  const all = `${tx.description || ''} ${tx.counterparty || ''} ${tx.code || ''} ${tx.note || ''} ${tx.reference || ''}`.toUpperCase();
+  if (/BIZUM/.test(all)) return true;
+  const name = (tx.counterparty || '').toUpperCase();
+  const card = /TARJ|CARD|POS\b|CCRD|COMPRA/.test(`${tx.code || ''}`.toUpperCase());
+  return Boolean(name) && !COMPANY.test(name) && !tx.mcc && !card && (tx.counterAccount || /TRANSF|TRF|ICDT|RCDT|PMNT/.test(`${tx.code || ''}`.toUpperCase()));
+}
+
 export function categorize(tx, rules = []) {
-  const text = `${tx.description || ''} ${tx.counterparty || ''}`.toUpperCase();
+  const text = `${tx.description || ''} ${tx.counterparty || ''} ${tx.code || ''} ${tx.note || ''}`.toUpperCase();
   const abs = Math.round(Math.abs(Number(tx.amount) || 0) * 100) / 100;
   for (const r of rules) {
     try {
@@ -71,6 +84,8 @@ export function categorize(tx, rules = []) {
       }
     } catch { /* regla mal escrita: se ignora */ }
   }
+  // Antes que las reglas por palabras: el concepto de un Bizum ("cena en el bar") no debe confundirse con un comercio
+  if (looksLikeBizum(tx)) return { category: 'Bizum', label: tx.amount > 0 ? 'Bizum recibido' : 'Bizum enviado', fixed: false };
   for (const [category, re] of DEFAULT_RULES) if (re.test(text)) return { category, label: null, fixed: FIXED_CATEGORIES.includes(category) };
   return { category: 'Otros', label: null, fixed: false };
 }

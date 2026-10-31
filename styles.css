@@ -142,6 +142,7 @@ header.top .sub { color: var(--muted); margin: 4px 0 0; font-size: 15px; }
 .allow-grid strong em { font-style: normal; font-size: 13px; font-weight: 500; color: var(--muted); margin-left: 2px; }
 
 .pos { color: var(--green); }
+.row strong.wrap { text-align: right; overflow-wrap: anywhere; font-weight: 600; max-width: 62%; }
 .prog { margin-top: 8px; font-size: 12px; color: var(--muted); }
 .prog > span:first-child { display: block; }
 .prog b { display: block; color: var(--ink); font-size: 15px; font-variant-numeric: tabular-nums; white-space: nowrap; margin: 1px 0 4px; }
