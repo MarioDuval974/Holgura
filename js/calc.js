@@ -240,9 +240,11 @@ export function learnedDaily(history) {
 export function recommendation(state, analysis = null) {
   const s = effectiveSettings(state), c = state.cycle;
   const income = c ? c.income : Number(s.salary) || 0;
-  const fixed = c ? c.fixedTotal : fixedTotalOf(s);
+  const fixed = c ? cycleFixedTotal(state) : fixedTotalOf(s);
   const days = c ? cycleInfo(c, s).totalDays : 30;
-  const sobrante = income - fixed;
+  const oo = c ? cycleOneOffs(state) : { in: 0, out: 0 };
+  const oneOffs = round2(oo.in - oo.out); // ingresos y gastos puntuales del ciclo
+  const sobrante = income + oneOffs - fixed;
 
   let daily = learnedDaily(state.history), source = 'historial';
   if (daily == null && analysis && analysis.elapsed >= 7) { daily = analysis.observedDaily; source = 'mes'; }
@@ -261,7 +263,7 @@ export function recommendation(state, analysis = null) {
   const dayToDay = Math.max(0, sobrante - savings);
   const start = c ? c.start : todayStr();
   const plan = spendingPlan(dayToDay, start, addDays(start, days), s);
-  return { income, fixed, sobrante, savings, cushion: round2(cushion), daily, source, dayToDay, perDay: dayToDay / days, days, plan };
+  return { income, fixed, oneOffs, sobrante, savings, cushion: round2(cushion), daily, source, dayToDay, perDay: dayToDay / days, days, plan };
 }
 
 // ---------- Gastos fijos "según banco" ----------
@@ -293,6 +295,24 @@ export function trackedFixed(state, upTo = '9999-12-31') {
 
 // Gastos fijos del ciclo contando lo que se haya pasado de lo previsto en los "según banco"
 export const cycleFixedTotal = (state, upTo) => (state.cycle?.fixedTotal || 0) + (trackedFixed(state, upTo)?.over || 0);
+
+// ---------- Ingresos y gastos puntuales ----------
+
+// Lo que entra o sale una vez (Hacienda, una venta, un regalo…): suma o resta a lo que te sobra este ciclo
+// y no cuenta como gasto del día a día. Los apuntas tú (cycle.extras) o los detecta el banco (impuestos).
+export function cycleOneOffs(state, upTo = '9999-12-31') {
+  const c = state.cycle, sp = state.bankSpend;
+  if (!c) return { in: 0, out: 0, list: [] };
+  const manual = (c.extras || []).map(e => ({ ...e, source: 'manual' }));
+  const bank = sp?.cycleId === c.id ? (sp.oneOffs || []).map(e => ({ ...e, source: 'bank' })) : [];
+  const list = [...manual, ...bank].filter(e => e.date >= c.start && e.date <= upTo)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  return {
+    in: round2(sum(list.filter(e => e.amount > 0), e => e.amount)),
+    out: round2(-sum(list.filter(e => e.amount < 0), e => e.amount)),
+    list,
+  };
+}
 
 // ---------- Semáforo de una revisión ----------
 
@@ -330,11 +350,13 @@ export function analyze(state, checkin) {
   // Ajustes: de algún cargo solo cuenta una parte (p. ej. 27 € de lotería, 7 € con efectivo de tu madre)
   const notMine = sum((state.adjustments || []).filter(a => a.date >= c.start && a.date <= checkin.date),
     a => Math.abs(a.amount) - a.counted);
-  const variable = c.startBalance - balance - fixedCharged - moved + extra - notMine;
+  // Puntuales (Hacienda, una venta…): no son gasto del día a día, pero cambian lo que te sobra
+  const oo = cycleOneOffs(state, checkin.date);
+  const variable = c.startBalance - balance - fixedCharged - moved + extra - notMine + oo.in - oo.out;
   const spent = Math.max(0, variable);
   const observedDaily = spent / elapsed;
 
-  const margin = c.income + extra - fixedTotal; // lo que te sobra tras los fijos
+  const margin = c.income + extra + oo.in - oo.out - fixedTotal; // lo que te sobra tras los fijos y los puntuales
   const goal = Number(c.savingsGoal) || 0;
   const available = margin - goal;                // lo que puedes gastar sin tocar tu objetivo de ahorro
 
@@ -363,10 +385,11 @@ export function closeCycle(state, endDate, endBalance) {
   const extra = sum(state.checkins.filter(k => k.cycleId === c.id), k => k.extraIncome);
   const moved = netToJars(state, c.id, endDate);
   const days = Math.max(1, diffDays(c.start, endDate));
+  const oo = cycleOneOffs(state, endDate);
   return {
     id: c.id, start: c.start, end: endDate, days, startBalance: c.startBalance,
-    income: c.income + extra, fixed: c.fixedTotal, goal: Number(c.savingsGoal) || 0,
-    variable: round2(Math.max(0, c.startBalance - endBalance - c.fixedTotal - moved + extra)),
+    income: c.income + extra + oo.in, fixed: c.fixedTotal, oneOffOut: oo.out, goal: Number(c.savingsGoal) || 0,
+    variable: round2(Math.max(0, c.startBalance - endBalance - c.fixedTotal - moved + extra + oo.in - oo.out)),
     saved: round2(netToJars(state, c.id, endDate, true)), endBalance: round2(endBalance),
   };
 }

@@ -131,9 +131,14 @@ export function splitCharge(charge, abs) {
 export function spendByCategory(list) {
   const byCat = {}, byDay = {}, bizumByDay = {};
   const fixedCharges = []; // lo que ha salido para gastos fijos "según banco" { date, key, amount }
+  const oneOffs = [];      // puntuales detectados en el banco (impuestos, Hacienda…) { date, amount, concept }
   const add = (obj, key, v) => { obj[key] = Math.round(((obj[key] || 0) + v) * 100) / 100; };
   let bizumIn = 0;
   for (const t of list) {
+    if (t.category === 'Impuestos') {
+      oneOffs.push({ date: t.date, amount: t.amount, concept: t.label || t.description || 'Impuestos' });
+      continue;
+    }
     if (t.fixed) {
       // Lo que sale suma al fijo; lo que entra (te devuelven tu parte) resta
       if (t.charge && t.amount) {
@@ -151,5 +156,5 @@ export function spendByCategory(list) {
     add(byCat, t.category, -t.amount);
     if (t.date) add(byDay, t.date, -t.amount); // gasto del día a día por fecha
   }
-  return { byCat, byDay, bizumByDay, fixedCharges, bizumIn: Math.round(bizumIn * 100) / 100 };
+  return { byCat, byDay, bizumByDay, fixedCharges, oneOffs, bizumIn: Math.round(bizumIn * 100) / 100 };
 }

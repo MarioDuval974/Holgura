@@ -149,7 +149,8 @@ function livePlan(useGoal) {
   // Sin redondear a 0 por día: un Bizum devuelto un día sin gasto también resta de la semana
   const net = d => (sp.byDay[d] || 0) - (back[d] || 0);
   const spentBetween = (from, to) => { let t = 0; for (let d = from; d < to; d = C.addDays(d, 1)) t += net(d); return t; };
-  const available = c.income - C.cycleFixedTotal(state) - (useGoal ? Number(c.savingsGoal) || 0 : 0);
+  const oo = C.cycleOneOffs(state);
+  const available = c.income + oo.in - oo.out - C.cycleFixedTotal(state) - (useGoal ? Number(c.savingsGoal) || 0 : 0);
 
   const day = C.spendingPlan(available - spentBetween(c.start, today), today, end, s);
   const monday = C.addDays(today, -((C.weekday(today) + 6) % 7));
@@ -229,6 +230,33 @@ function statusBlock(a, k) {
     </section>`;
 }
 
+const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+// Detalles cortos de un gasto fijo para la lista: día, meses en que se cobra y si va "según banco"
+const fixedTags = i => [
+  i.day ? `día ${i.day}` : '',
+  i.months?.length ? `solo ${i.months.map(m => MONTHS[m - 1]).join(', ')}` : '',
+  i.key ? 'según banco' : '',
+].filter(Boolean).join(' · ');
+
+// Hoja para crear o editar un gasto fijo
+function openFixedForm(id = null) {
+  const i = id ? state.settings.fixedItems.find(x => x.id === id) : null;
+  openSheet(i ? 'Editar gasto fijo' : 'Nuevo gasto fijo', `
+    <label class="field"><span>Nombre</span><input id="fx-name" placeholder="Ej.: Alquiler" value="${esc(i?.name || '')}"></label>
+    <label class="field"><span>Categoría</span><select id="fx-cat">
+      ${CATEGORY_NAMES.map(c => `<option value="${c}" ${c === (i?.category || 'Otros') ? 'selected' : ''}>${icon(c)} ${c}</option>`).join('')}
+    </select></label>
+    ${moneyField(i?.months?.length ? 'Importe cada vez que se cobra' : 'Importe al mes', 'id="fx-amount"', numStr(i?.amount || 0))}
+    <label class="field"><span>Día en que te lo cobran (opcional)</span>
+      <input id="fx-day" type="number" min="1" max="31" inputmode="numeric" placeholder="—" value="${i?.day ?? ''}">
+      <small>Si lo pones, en cada revisión sabré si ya te lo han cobrado.</small></label>
+    ${i?.months?.length ? `<p class="note">Solo se cobra en: ${i.months.map(m => MONTHS[m - 1]).join(', ')}.</p>` : ''}
+    ${i?.key ? '<p class="note">Se cuenta <b>según tu banco</b>: lo que de verdad salga de tu cuenta para este gasto. El importe de aquí es lo previsto.</p>' : ''}
+    <button class="btn primary block" data-act="fixed-save">${i ? 'Guardar' : 'Añadir'}</button>
+    ${i ? `<button class="btn text danger block" data-act="fixed-del" data-id="${i.id}">Eliminar este gasto</button>` : ''}`, { fixedId: id });
+}
+
 function fixedEditor() {
   const s = state.settings;
   let html = seg('fixedMode', [['total', 'Importe total'], ['desglose', 'Gasto a gasto']], s.fixedMode);
@@ -244,32 +272,23 @@ function fixedEditor() {
       groups.get(cat).push(i);
     }
     const ordered = CATEGORY_NAMES.filter(c => groups.has(c));
-    const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
-    html += `<div class="fx-list">${ordered.map(cat => `
+    // Una línea por gasto; al tocarlo se edita en una hoja (la lista con todos los campos era muy larga)
+    html += `<div class="fx-list compact">${ordered.map(cat => `
       <p class="fx-group">${icon(cat)} ${cat}<span>${[
         sum(groups.get(cat).filter(i => !i.months?.length), i => i.amount),
         sum(groups.get(cat).filter(i => i.months?.length), i => i.amount),
       ].map((v, k) => (v ? `${money(v)}${k ? ' trimestral' : '/mes'}` : '')).filter(Boolean).join(' + ')}</span></p>
-      ${groups.get(cat).map(i => `
-      <div class="fx-row">
-        <div class="fx-top">
-          <input class="fx-name" placeholder="Ej.: Alquiler" data-item="${i.id}" data-field="name" value="${esc(i.name)}" aria-label="Nombre del gasto">
-          <select data-item="${i.id}" data-field="category" aria-label="Categoría">
-            ${CATEGORY_NAMES.map(c => `<option ${c === cat ? 'selected' : ''}>${c}</option>`).join('')}
-          </select>
-        </div>
-        ${i.months?.length ? `<small class="fx-tag">Solo algunos meses: ${i.months.map(m => MONTHS[m - 1]).join(', ')}</small>` : ''}
-        <div class="fx-line">
-          <div class="money-input"><input inputmode="decimal" placeholder="0,00" data-item="${i.id}" data-field="amount" value="${numStr(i.amount)}" aria-label="Importe"><em>€</em></div>
-          <input class="fx-day" inputmode="numeric" placeholder="Día" data-item="${i.id}" data-field="day" value="${i.day ?? ''}" aria-label="Día de cargo">
-          <button class="icon-btn danger" data-act="fixed-del" data-id="${i.id}" aria-label="Eliminar">✕</button>
-        </div>
-      </div>`).join('')}`).join('')}
+      <div class="fx-items">${groups.get(cat).map(i => `
+        <button class="fx-item" data-act="fixed-edit" data-id="${i.id}">
+          <span class="grow"><b>${esc(i.name || 'Sin nombre')}</b>${fixedTags(i) ? `<small>${fixedTags(i)}</small>` : ''}</span>
+          <strong>${money(i.amount)}</strong><span class="chev">›</span>
+        </button>`).join('')}
+      </div>`).join('')}
     </div>
     <button class="btn ghost block" data-act="fixed-add">+ Añadir gasto fijo</button>
     <p class="fx-total">Total al mes: <strong data-fixed-total>${money(C.fixedTotalOf(s))}</strong></p>
     ${C.periodicTotalOf(s) ? `<small class="hint">Además, ${money(C.periodicTotalOf(s))} en gastos que solo se cobran algunos meses (trimestrales): se descuentan en el ciclo en que tocan.</small>` : ''}
-    <small class="hint">El <b>día</b> en que te lo cobran es opcional, pero si lo pones sabré qué recibos te quedan por pagar en cada revisión.</small>`;
+    <small class="hint">Toca un gasto para cambiarlo o eliminarlo.</small>`;
   }
   return html;
 }
@@ -542,6 +561,7 @@ function monthCard(rec) {
       <div class="rows">
         <div class="row"><span>Nómina</span><strong>${money(rec.income)}</strong></div>
         <div class="row"><span>Gastos fijos</span><strong>− ${money(rec.fixed)}</strong></div>
+        ${rec.oneOffs ? `<div class="row"><span>Ingresos y gastos puntuales</span><strong>${rec.oneOffs < 0 ? '− ' : '+ '}${money(Math.abs(rec.oneOffs))}</strong></div>` : ''}
         <div class="row total"><span>Te sobra</span><strong>${money(rec.sobrante)}</strong></div>
       </div>
       ${rec.sobrante > 0 ? `
@@ -593,8 +613,12 @@ function pendingDefaults() {
   if (!c.fixedItems.length) return { mode: 'total', amount: last ? last.pendingFixed : c.fixedTotal };
   const ids = c.fixedItems.filter(i => {
     const d = C.chargeDateInCycle(i, c.start);
-    if (d) return d > today;
-    return last ? (last.pendingIds || []).includes(i.id) : true;
+    const lastSays = last ? (last.pendingIds || []).includes(i.id) : true;
+    if (!d) return lastSays;
+    if (d > today) return true;
+    // Ya pasó el día de cobro: si revisaste después de esa fecha, manda lo que marcaste
+    // (un recibo puede llegar más tarde, p. ej. el primer día laborable)
+    return last && last.date >= d ? lastSays : false;
   }).map(i => i.id);
   return { mode: 'items', ids };
 }
@@ -627,12 +651,11 @@ function viewRevisar() {
         </div>
       </div>` : c.fixedTotal > 0 ? moneyField('Gastos fijos que aún no te han cobrado', 'id="ck-pending"', numStr(pend.amount), `De tus ${money(c.fixedTotal)} de gastos fijos.`) : ''}
     ${showEarly ? `<label class="check solo"><input type="checkbox" id="ck-early"><span>Ya me ha llegado la nómina del mes que viene</span></label>` : ''}
-    <details class="more"><summary>¿Has recibido algún ingreso extra?</summary>
-      ${moneyField('Ingresos extra desde la última revisión', 'id="ck-extra"', '', 'Un Bizum, una venta, un regalo… Lo sumo a lo que tienes para este ciclo.')}
-    </details>
     <label class="field"><span>Fecha</span><input type="date" id="ck-date" value="${today}" min="${c.start}" max="${today}"></label>
-    <button class="btn primary block" data-act="checkin-save">Ver cómo voy</button>
+    <button class="btn primary block" data-act="checkin-save">Guardar</button>
   </section>`;
+
+  html += oneOffsCard();
 
   const list = cycleCheckins().reverse();
   if (list.length) {
@@ -660,7 +683,7 @@ function viewRevisar() {
     <p class="muted">Revisas ${freqLabel(s.checkFreq)} a las ${s.reminderTime}. Añádelo a tu Calendario para que el móvil te avise.</p>
     <div class="btn-row">
       <button class="btn ghost" data-act="ics">📅 Añadir al Calendario</button>
-      <button class="btn ghost" data-act="tab" data-tab="mimes">Cambiar</button>
+      <button class="btn ghost" data-act="tab" data-tab="mimes" data-sec="revisiones">Cambiar</button>
     </div>
   </section>`;
   return html;
@@ -687,7 +710,51 @@ function setLastBalance(amount, source, at = new Date().toISOString()) {
   persist();
 }
 
+// ---------- Ingresos y gastos puntuales ----------
+
+function oneOffsCard() {
+  const oo = C.cycleOneOffs(state);
+  return `<section class="card">
+    <h3>Ingresos y gastos puntuales</h3>
+    <p class="muted">Lo que entra o sale una sola vez (Hacienda, una multa, una venta, un regalo…). Suma o resta a lo que te sobra este ciclo y no cuenta como gasto del día a día.</p>
+    ${oo.list.length ? `<div class="list">${oo.list.map(e => `
+      <div class="list-row static">
+        <span class="mv ${e.amount > 0 ? 'in' : 'out'}">${e.amount > 0 ? '＋' : '−'}</span>
+        <span class="grow">${esc(e.concept)}<small>${dayFmt(e.date)}${e.source === 'bank' ? ' · detectado en tu banco' : ''}</small></span>
+        <strong class="${e.amount < 0 ? 'neg' : 'pos'}">${e.amount < 0 ? '− ' : '+ '}${money(Math.abs(e.amount))}</strong>
+        ${e.source === 'manual' ? `<button class="icon-btn" data-act="oneoff-del" data-id="${e.id}" aria-label="Eliminar">✕</button>` : ''}
+      </div>`).join('')}</div>` : ''}
+    <div class="btn-row two">
+      <button class="btn ghost" data-act="oneoff-new" data-type="out">− Gasto puntual</button>
+      <button class="btn ghost" data-act="oneoff-new" data-type="in">＋ Ingreso puntual</button>
+    </div>
+    ${oo.list.some(e => e.source === 'bank') ? '<small class="hint">Los impuestos que detecta tu banco se apuntan solos: no hace falta añadirlos.</small>' : ''}
+  </section>`;
+}
+
+function openOneOffForm(type) {
+  const c = state.cycle;
+  openSheet(type === 'in' ? 'Ingreso puntual' : 'Gasto puntual', `
+    <label class="field"><span>Concepto</span><input id="oo-concept" placeholder="${type === 'in' ? 'Ej.: Venta de la bici' : 'Ej.: Pago a Hacienda'}"></label>
+    ${moneyField('Importe', 'id="oo-amount"', '')}
+    <label class="field"><span>Fecha</span><input type="date" id="oo-date" value="${C.todayStr()}" min="${c.start}" max="${C.todayStr()}"></label>
+    <button class="btn primary block" data-act="oneoff-save">Guardar</button>`, { oneOffType: type });
+}
+
 // Cobrados hasta ahora: los marcados a mano + lo retirado de verdad para los fijos "según banco"
+// Redibuja Revisar sin perder lo que ya habías tocado en el formulario (checks, fecha, ingresos extra)
+function renderKeepingForm() {
+  const checks = Object.fromEntries([...document.querySelectorAll('[data-fixed-id]')].map(el => [el.dataset.fixedId, el.checked]));
+  const keep = ['ck-date', 'ck-extra', 'ck-pending'].map(id => [id, $(`#${id}`)?.value]);
+  const early = $('#ck-early')?.checked;
+  render();
+  for (const el of document.querySelectorAll('[data-fixed-id]')) if (el.dataset.fixedId in checks) el.checked = checks[el.dataset.fixedId];
+  for (const [id, v] of keep) if (v != null && $(`#${id}`)) $(`#${id}`).value = v;
+  if (early != null && $('#ck-early')) $('#ck-early').checked = early;
+  const counter = $('#ck-charged');
+  if (counter) counter.textContent = chargedText(state.cycle.fixedItems.filter(i => checks[i.id]));
+}
+
 function chargedText(marked) {
   const tracked = C.trackedFixed(state);
   const manual = sum(marked.filter(i => !tracked?.ids.has(i.id)), i => i.amount);
@@ -712,7 +779,7 @@ function saveCheckin() {
   }
   const k = {
     id: S.uid(), cycleId: c.id, date, balance, pendingFixed, pendingIds,
-    extraIncome: Math.max(0, parseMoney($('#ck-extra')?.value) || 0),
+    extraIncome: 0, // los ingresos extra ahora van en "Ingresos y gastos puntuales" del ciclo
     earlyIncome: $('#ck-early')?.checked ? Number(state.settings.salary) || 0 : 0,
   };
   if (state.lastBalance?.amount !== balance) setLastBalance(balance, 'manual');
@@ -721,6 +788,8 @@ function saveCheckin() {
   state.checkins.push(k);
   commit();
   openCheckinResult(k.id);
+  // El presupuesto del ciclo se actualiza solo con los movimientos del banco
+  if (B.isReady()) refreshSpend({ silent: true });
 }
 
 function openCheckinResult(id) {
@@ -897,7 +966,7 @@ function saveCobro() {
   syncCycle();
   commit();
 
-  const leftover = Math.round((closed.income - closed.fixed - closed.variable - closed.saved) * 100) / 100;
+  const leftover = Math.round((closed.income - closed.fixed - (closed.oneOffOut || 0) - closed.variable - closed.saved) * 100) / 100;
   openSheet('Resumen del ciclo', `
     <p class="muted center">${dateFmt(closed.start)} → ${dateFmt(closed.end)}</p>
     <div class="rows">
@@ -914,31 +983,45 @@ function saveCobro() {
 
 // ---------- Mi mes ----------
 
-function viewMiMes() {
-  const s = state.settings, c = state.cycle;
-  return header('Mi mes', 'Tus datos y preferencias') + `
-    <section class="card">
-      <h3>Ingresos</h3>
+// Mi mes es un menú: cada apartado se abre en su propia pantalla (la de una sola página era demasiado larga)
+let mimesSection = null;
+
+// Quita el título de una tarjeta cuando ya lo lleva la cabecera de la pantalla
+const untitled = html => html.replace(/<h3>[^<]*<\/h3>/, '');
+
+const MIMES_SECTIONS = {
+  ingresos: {
+    icon: '💶', title: 'Ingresos',
+    summary: s => `${money(s.salary)}/mes · ${s.cycleType === 'natural' ? 'del 1 al 30/31' : `cobras hacia el día ${s.payDay}`}`,
+    view: s => `<section class="card">
       ${moneyField('Nómina mensual', 'data-bind="salary" data-kind="money"', numStr(s.salary))}
       <div class="field"><span>¿Cómo cuentas el mes?</span>${seg('cycleType', [['nomina', 'De nómina a nómina'], ['natural', 'Del 1 al 30/31']], s.cycleType)}</div>
       <label class="field"><span>Día en que sueles cobrar</span>
         <input type="number" min="1" max="31" inputmode="numeric" data-bind="payDay" data-kind="int" data-rerender value="${s.payDay}"></label>
-    </section>
-
-    <section class="card">
-      <h3>Gastos fijos</h3>
-      ${fixedEditor()}
-    </section>
-
-    ${budgetSection()}
-
-    <section class="card">
-      <h3>Revisiones</h3>
+    </section>`,
+  },
+  fijos: {
+    icon: '🧾', title: 'Gastos fijos',
+    summary: s => `${money(C.fixedTotalOf(s))}/mes · ${s.fixedMode === 'total' ? 'importe total' : `${s.fixedItems.length} gastos`}`,
+    view: () => `<section class="card">${fixedEditor()}</section>`,
+  },
+  presupuesto: {
+    icon: '🎯', title: 'Presupuesto del día a día',
+    summary: () => `Repartido ${money(budgetTotal())} de ${money(dayToDayAvailable())}`,
+    view: () => untitled(budgetSection()),
+  },
+  revisiones: {
+    icon: '🔔', title: 'Revisiones',
+    summary: s => `${freqLabel(s.checkFreq).replace(/^./, ch => ch.toUpperCase())} a las ${s.reminderTime}`,
+    view: () => `<section class="card">
       ${freqEditor()}
       <button class="btn ghost block" data-act="ics">📅 Añadir recordatorio al Calendario</button>
-    </section>
-
-    <section class="card">
+    </section>`,
+  },
+  gastar: {
+    icon: '📊', title: 'Lo que puedes gastar y ahorro',
+    summary: s => `Por ${s.allowanceView === 'semana' ? 'semana' : 'día'} · finde ${String(C.effectiveSettings(state).weekendFactor).replace('.', ',')}× · margen ${s.safetyPct} %`,
+    view: s => `<section class="card">
       <h3>Lo que puedes gastar</h3>
       <div class="field"><span>Quiero verlo</span>${seg('allowanceView', [['dia', 'Por día'], ['semana', 'Por semana']], s.allowanceView)}</div>
       <div class="field"><span>¿Cuánto más gastas el fin de semana?</span>
@@ -948,26 +1031,37 @@ function viewMiMes() {
       <label class="check solo"><input type="checkbox" data-bind="fridayWeekend" data-kind="bool" data-rerender ${s.fridayWeekend ? 'checked' : ''}>
         <span>El viernes cuenta como fin de semana</span></label>
     </section>
-
     <section class="card">
       <h3>Recomendación de ahorro</h3>
       <div class="field"><span>Margen de seguridad para imprevistos</span>
         ${seg('safetyPct', [[10, '10 %'], [15, '15 %'], [20, '20 %'], [25, '25 %']], s.safetyPct)}
         <small>Cuánto dejo de colchón sobre lo que sueles gastar antes de recomendarte ahorrar. Más margen = más tranquilidad, menos ahorro.</small>
       </div>
-    </section>
-
-    <section class="card">
-      <h3>Ciclo actual</h3>
-      <label class="field"><span>Empezó el</span><input type="date" data-cbind="start" value="${c.start}" max="${C.todayStr()}"></label>
-      ${moneyField('Saldo al empezar', 'data-cbind="startBalance"', numStr(c.startBalance))}
+    </section>`,
+  },
+  ciclo: {
+    icon: '🔄', title: 'Ciclo actual',
+    summary: () => `Desde el ${dateFmt(state.cycle.start)} · empezó con ${money(state.cycle.startBalance)}`,
+    view: s => `<section class="card">
+      <label class="field"><span>Empezó el</span><input type="date" data-cbind="start" value="${state.cycle.start}" max="${C.todayStr()}"></label>
+      ${moneyField('Saldo al empezar', 'data-cbind="startBalance"', numStr(state.cycle.startBalance))}
       <button class="btn ghost block" data-act="cobro-open">${s.cycleType === 'natural' ? 'Empezar nuevo mes' : 'He cobrado: empezar nuevo ciclo'}</button>
-    </section>
-
-    ${bankSection()}
-
-    <section class="card">
-      <h3>Tus datos</h3>
+    </section>`,
+  },
+  banco: {
+    icon: '🏦', title: 'Conexión con el banco',
+    summary: () => {
+      const st = bankUI.status;
+      if (!B.getConfig().password) return 'Sin conectar (opcional)';
+      if (st?.connected) return `Conectado a ${st.bank}${st.validUntil ? ` · hasta el ${dateFmt(st.validUntil.slice(0, 10))}` : ''}`;
+      return st ? 'Sin conectar o caducada' : 'Comprobando…';
+    },
+    view: () => untitled(bankSection()),
+  },
+  datos: {
+    icon: '💾', title: 'Tus datos',
+    summary: () => 'Copias de seguridad e importar',
+    view: () => `<section class="card">
       <p class="muted">Todo se guarda solo en este móvil. Haz una copia de vez en cuando por si cambias de móvil o borras la app.</p>
       <div class="btn-col">
         <button class="btn ghost block" data-act="export">⬇️ Exportar copia de seguridad</button>
@@ -975,8 +1069,28 @@ function viewMiMes() {
         <button class="btn ghost block" data-act="import">📊 Importar análisis del banco</button>
         <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
       </div>
+    </section>`,
+  },
+};
+
+function viewMiMes() {
+  const s = state.settings;
+  const sec = MIMES_SECTIONS[mimesSection];
+  if (sec) {
+    return `<header class="top">
+        <button class="link back" data-act="mimes-back">‹ Mi mes</button>
+        <h1 class="sub-title">${sec.icon} ${sec.title}</h1>
+      </header>${sec.view(s)}`;
+  }
+  return header('Mi mes', 'Tus datos y preferencias') + `
+    <section class="card menu">${Object.entries(MIMES_SECTIONS).map(([id, m]) => `
+      <button class="menu-row" data-act="mimes-open" data-sec="${id}">
+        <span class="menu-icon">${m.icon}</span>
+        <span class="grow"><b>${m.title}</b><small>${esc(m.summary(s))}</small></span>
+        <span class="chev">›</span>
+      </button>`).join('')}
     </section>
-    <p class="footer">Holgura · v3.0</p>`;
+    <p class="footer">Holgura · v3.4</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -984,7 +1098,9 @@ function viewMiMes() {
 // Lo que hay para el día a día en este ciclo: nómina − fijos − objetivo de ahorro
 const dayToDayAvailable = () => {
   const c = state.cycle;
-  return c ? c.income - C.cycleFixedTotal(state) - (Number(c.savingsGoal) || 0) : 0;
+  if (!c) return 0;
+  const oo = C.cycleOneOffs(state);
+  return c.income + oo.in - oo.out - C.cycleFixedTotal(state) - (Number(c.savingsGoal) || 0);
 };
 const budgetTotal = () => sum(budgetCategories(), c => (state.settings.budgets || {})[c] || 0);
 
@@ -1063,9 +1179,9 @@ function budgetCard() {
   }).join('');
 
   return `<section class="card">
-    <div class="card-head"><h3>🎯 Presupuesto del ciclo</h3>${B.isReady() ? '<button class="link" data-act="spend-refresh">Actualizar</button>' : ''}</div>
+    <h3>🎯 Presupuesto del ciclo</h3>
     ${sp ? `<p class="muted">Llevas <b>${money(Math.max(0, totalSpent))}</b> de ${money(budgetTotal())} · día ${info.elapsed} de ${info.totalDays}${bizumAside ? ` · <span class="pos">+${money(sp.bizumIn)} devueltos por Bizum</span>` : ''}</p>`
-      : `<p class="muted">${B.isReady() ? 'Pulsa «Actualizar» para leer tus movimientos del banco.' : 'Conecta tu banco en Mi mes para ver cuánto llevas en cada categoría.'}</p>`}
+      : `<p class="muted">${B.isReady() ? 'Se actualiza solo al traer el saldo del banco o al guardar una revisión.' : 'Conecta tu banco en Mi mes para ver cuánto llevas en cada categoría.'}</p>`}
     ${rows}
     ${sp ? `<p class="note">Actualizado ${new Date(sp.at).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}. La rayita marca hasta dónde «tocaría» llevar gastado hoy.</p>` : ''}
   </section>`;
@@ -1369,9 +1485,13 @@ function closeSheet() {
 
 const actions = {
   tab: el => {
-    closeSheet(); tab = el.dataset.tab; render(); window.scrollTo(0, 0);
+    closeSheet(); tab = el.dataset.tab;
+    if (tab === 'mimes') mimesSection = el.dataset.sec || null; // pulsar Mi mes vuelve al menú (o abre el apartado pedido)
+    render(); window.scrollTo(0, 0);
     if (tab === 'mimes') loadBankStatus();
   },
+  'mimes-open': el => { mimesSection = el.dataset.sec; render(); window.scrollTo(0, 0); },
+  'mimes-back': () => { mimesSection = null; render(); window.scrollTo(0, 0); },
   'go-revisar': () => { tab = 'revisar'; render(); window.scrollTo(0, 0); },
   'wiz-next': wizNext,
   'wiz-back': () => { wizStep = Math.max(0, wizStep - 1); render(); },
@@ -1389,15 +1509,28 @@ const actions = {
     if (sheetCtx?.checkinId) openCheckinResult(sheetCtx.checkinId); // cambio Día/Semana dentro del resultado
   },
 
-  'fixed-add': () => {
-    const id = S.uid();
-    state.settings.fixedItems.push({ id, name: '', amount: 0, day: null, category: 'Otros' });
+  'fixed-add': () => openFixedForm(),
+  'fixed-edit': el => openFixedForm(el.dataset.id),
+  'fixed-save': () => {
+    const name = $('#fx-name').value.trim();
+    const amount = parseMoney($('#fx-amount').value);
+    if (!name) return toast('Ponle un nombre al gasto');
+    if (!(amount >= 0)) return toast('Escribe el importe');
+    const d = parseInt($('#fx-day').value, 10);
+    const data = { name, amount, category: $('#fx-cat').value, day: d >= 1 && d <= 31 ? d : null };
+    const id = sheetCtx?.fixedId;
+    if (id) Object.assign(state.settings.fixedItems.find(i => i.id === id), data);
+    else state.settings.fixedItems.push({ id: S.uid(), ...data });
+    closeSheet();
     syncCycle();
     commit();
-    document.querySelector(`[data-item="${id}"][data-field="name"]`)?.focus();
+    toast(id ? 'Gasto guardado' : 'Gasto añadido');
   },
   'fixed-del': el => {
+    const item = state.settings.fixedItems.find(i => i.id === el.dataset.id);
+    if (!item || !confirm(`¿Eliminar «${item.name || 'este gasto'}» de tus gastos fijos?`)) return;
     state.settings.fixedItems = state.settings.fixedItems.filter(i => i.id !== el.dataset.id);
+    closeSheet();
     syncCycle();
     commit();
   },
@@ -1493,7 +1626,7 @@ const actions = {
       setLastBalance(b.amount, 'bank');
       // De paso se leen los movimientos, para que los fijos "según banco" (psicóloga, madre…) estén al día
       await refreshSpend({ silent: true });
-      if (tab === 'revisar') render();
+      if (tab === 'revisar') renderKeepingForm();
       const note = $('#bk-note');
       if (note) note.textContent = `${balanceNote(state.lastBalance)} Puedes corregirlo antes de guardar.`;
       toast('Saldo y movimientos traídos del banco');
@@ -1506,6 +1639,24 @@ const actions = {
   },
   'bank-tx': openTransactions,
   'tx-detail': el => openTxDetail(Number(el.dataset.i)),
+  'oneoff-new': el => openOneOffForm(el.dataset.type),
+  'oneoff-save': () => {
+    const concept = $('#oo-concept').value.trim();
+    const amount = parseMoney($('#oo-amount').value);
+    if (!concept) return toast('Escribe el concepto');
+    if (!(amount > 0)) return toast('Escribe el importe');
+    const type = sheetCtx?.oneOffType;
+    state.cycle.extras = [...(state.cycle.extras || []),
+      { id: S.uid(), date: $('#oo-date').value || C.todayStr(), concept, amount: type === 'in' ? amount : -amount }];
+    closeSheet();
+    commit();
+    toast(type === 'in' ? 'Ingreso puntual apuntado' : 'Gasto puntual apuntado');
+  },
+  'oneoff-del': el => {
+    if (!confirm('¿Eliminar este movimiento puntual?')) return;
+    state.cycle.extras = (state.cycle.extras || []).filter(e => e.id !== el.dataset.id);
+    commit();
+  },
   'spend-refresh': async el => {
     el.textContent = 'Leyendo…';
     await refreshSpend();
@@ -1536,17 +1687,6 @@ document.addEventListener('change', e => {
     syncCycle(prevSalary);
     persist();
     if ('rerender' in el.dataset) render();
-  } else if (el.dataset.item) {
-    const item = state.settings.fixedItems.find(i => i.id === el.dataset.item);
-    if (!item) return;
-    const f = el.dataset.field;
-    if (f === 'name') item.name = el.value.trim();
-    if (f === 'category') { item.category = el.value; syncCycle(); persist(); return render(); }
-    if (f === 'amount') item.amount = Math.max(0, parseMoney(el.value) || 0);
-    if (f === 'day') { const d = parseInt(el.value, 10); item.day = d >= 1 && d <= 31 ? d : null; el.value = item.day ?? ''; }
-    syncCycle();
-    persist();
-    document.querySelectorAll('[data-fixed-total]').forEach(n => { n.textContent = money(C.fixedTotalOf(state.settings)); });
   } else if (el.dataset.cbind) {
     if (el.dataset.cbind === 'start' && el.value) state.cycle.start = el.value;
     if (el.dataset.cbind === 'startBalance') { const v = parseMoney(el.value); if (Number.isFinite(v)) state.cycle.startBalance = v; }

@@ -9,7 +9,9 @@ Holgura es una app web (PWA) de finanzas personales pensada para el móvil:
 - **Revisiones periódicas:** escribes el saldo de tu cuenta y te dice si vas bien 🟢, si debes ajustar 🟡 o si tendrás que tirar de la hucha 🔴.
 - **Huchas:** tantas como quieras, con ingresos, retiradas y objetivos.
 
-🔒 Los datos se guardan solo en tu móvil. Este repositorio contiene únicamente el código de la app.
+🔒 Tus datos (presupuesto, huchas, revisiones) se guardan solo en tu móvil. Este repositorio contiene únicamente el código de la app.
+
+Si conectas tu banco (opcional), el servidor de Holgura guarda cifrado el permiso de lectura: el banco, la fecha de caducidad y tus cuentas con el IBAN parcialmente oculto. El saldo y los movimientos pasan por el servidor cuando la app los pide, pero no se guardan allí. Desconectar el banco borra ese permiso.
 
 ## Instalar en el iPhone
 
