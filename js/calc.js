@@ -249,11 +249,19 @@ export function recommendation(state, analysis = null) {
   let daily = learnedDaily(state.history), source = 'historial';
   if (daily == null && analysis && analysis.elapsed >= 7) { daily = analysis.observedDaily; source = 'mes'; }
 
-  let savings, cushion = 0;
+  let savings, cushion = 0, basis = null, planned = 0;
   if (daily == null) {
-    // Sin datos todavía: regla 50/30/20 (ahorrar el 20 % del sueldo) sin pasar de la mitad del sobrante
+    // Sin datos todavía: regla 50/30/20 (ahorrar el 20 % del sueldo) sin pasar de la mitad del sobrante.
+    // Si los fijos ya se llevan más de la mitad de la nómina, el 20 % deja muy poco para comer: se propone el 10 %
     source = 'provisional';
-    savings = Math.max(0, Math.min(income * 0.2, sobrante * 0.5));
+    basis = fixed > income * 0.5 ? '10' : '20';
+    savings = Math.max(0, Math.min(income * (basis === '10' ? 0.1 : 0.2), sobrante * 0.5));
+    // Con presupuesto del día a día repartido, se respeta lo que necesitas (más el margen): solo puede bajar la propuesta
+    planned = sum(Object.values(s.budgets || {}), v => v);
+    if (planned > 0) {
+      const room = sobrante - planned * (1 + (Number(s.safetyPct) || 0) / 100);
+      if (room < savings) { savings = Math.max(0, room); basis = 'presupuesto'; cushion = planned * (Number(s.safetyPct) || 0) / 100; }
+    }
   } else {
     const estVar = daily * days;
     cushion = estVar * (Number(s.safetyPct) || 0) / 100;
@@ -263,7 +271,7 @@ export function recommendation(state, analysis = null) {
   const dayToDay = Math.max(0, sobrante - savings);
   const start = c ? c.start : todayStr();
   const plan = spendingPlan(dayToDay, start, addDays(start, days), s);
-  return { income, fixed, oneOffs, sobrante, savings, cushion: round2(cushion), daily, source, dayToDay, perDay: dayToDay / days, days, plan };
+  return { income, fixed, oneOffs, sobrante, savings, cushion: round2(cushion), daily, source, basis, planned, dayToDay, perDay: dayToDay / days, days, plan };
 }
 
 // ---------- Gastos fijos "según banco" ----------

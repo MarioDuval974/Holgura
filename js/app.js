@@ -525,8 +525,13 @@ Tus revisiones y huchas no se tocan. ¿Continuar?`);
 
 function monthCard(rec) {
   const c = state.cycle, s = state.settings;
+  const later = 'Cuando cierres tu primer ciclo lo ajustaré a lo que gastas de verdad.';
   const notes = {
-    provisional: 'Cálculo provisional (regla 50/30/20). Cuando cierres tu primer ciclo lo ajustaré a lo que gastas de verdad.',
+    provisional: {
+      20: `Cálculo provisional (regla 50/30/20: ahorrar el 20 % de la nómina). ${later}`,
+      10: `Cálculo provisional: tus gastos fijos ya se llevan más de la mitad de la nómina, así que empiezo proponiendo ahorrar el 10 %. ${later}`,
+      presupuesto: `Cálculo provisional: lo que te sobra menos tu presupuesto del día a día (${money(rec.planned)}) y un margen del ${s.safetyPct} %. ${later}`,
+    }[rec.basis],
     mes: `Basado en lo que llevas gastado este ciclo (≈ ${money(rec.daily)}/día) más un margen de seguridad del ${s.safetyPct} %.`,
     historial: `Basado en tu gasto real de los últimos ciclos (≈ ${money(rec.daily)}/día) más un margen de seguridad del ${s.safetyPct} % (${money(rec.cushion)}).`,
   };
@@ -572,6 +577,7 @@ function monthCard(rec) {
           ? `<p>Te quedarían <b>${money(rec.dayToDay)}</b> para el día a día (${planSummary(rec.plan, rec.perDay)}).</p>`
           : `<p>Con tu gasto habitual${rec.daily ? ` (≈ ${money(rec.daily)}/día)` : ''} este ciclo no queda margen para ahorrar. Para llegar al cobro sin tirar de la hucha, el día a día tendría que quedarse en <b>${money(rec.dayToDay)}</b> (${planSummary(rec.plan, rec.perDay)}).</p>`}
         <p class="note">${notes[rec.source]}</p>
+        ${rec.source === 'provisional' && !rec.planned ? `<p class="note">¿No te encaja? Reparte en <button class="link" data-act="tab" data-tab="mimes" data-sec="presupuesto">Presupuesto del día a día</button> lo que sueles gastar en comida, transporte… y ajusto la propuesta.</p>` : ''}
       </div>` : ''}
       ${goalHtml}
     </section>`;
@@ -1052,7 +1058,7 @@ const MIMES_SECTIONS = {
     icon: '🏦', title: 'Conexión con el banco',
     summary: () => {
       const st = bankUI.status;
-      if (!B.getConfig().password) return 'Sin conectar (opcional)';
+      if (!B.getConfig().password) return 'Opcional · requiere servidor propio';
       if (st?.connected) return `Conectado a ${st.bank}${st.validUntil ? ` · hasta el ${dateFmt(st.validUntil.slice(0, 10))}` : ''}`;
       return st ? 'Sin conectar o caducada' : 'Comprobando…';
     },
@@ -1090,7 +1096,7 @@ function viewMiMes() {
         <span class="chev">›</span>
       </button>`).join('')}
     </section>
-    <p class="footer">Holgura · v3.5</p>`;
+    <p class="footer">Holgura · v3.6</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -1115,20 +1121,22 @@ function budgetSection() {
   const b = state.settings.budgets || {};
   return `<section class="card">
     <h3>Presupuesto del día a día</h3>
-    <p class="muted">Reparte por categorías lo que te queda tras los gastos fijos. Holgura lo compara con tus movimientos del banco y te avisa si vas rápido.</p>
+    <p class="muted">${B.isReady()
+      ? 'Reparte por categorías lo que te queda tras los gastos fijos. Holgura lo compara con tus movimientos del banco y te avisa si vas rápido.'
+      : 'Reparte por categorías lo que sueles gastar en el día a día (comida, transporte, ocio…). Mientras no tenga tu historial, lo uso para proponerte un ahorro que te deje lo suficiente para vivir. Lo que gastas lo sigo con tus revisiones de saldo.'}</p>
     <div class="budget-list">${budgetCategories().map(cat => `
       <label class="budget-row"><span>${icon(cat)} ${cat}</span>
         <div class="money-input"><input inputmode="decimal" placeholder="—" data-budget="${cat}" value="${numStr(b[cat] || 0)}" aria-label="Tope de ${cat}"><em>€</em></div>
       </label>`).join('')}
     </div>
     <p class="fx-total" id="budget-summary">${budgetSummaryText()}</p>
-    <label class="field"><span>Los Bizum cuentan en…</span>
+    ${B.isReady() ? `<label class="field"><span>Los Bizum cuentan en…</span>
       <select data-bind="bizumTo" data-kind="text" data-rerender>
         ${BUDGET_CATEGORIES.filter(c => c !== 'Bizum').map(c => `<option value="${c}" ${state.settings.bizumTo === c ? 'selected' : ''}>${icon(c)} ${c}</option>`).join('')}
         <option value="" ${!state.settings.bizumTo ? 'selected' : ''}>Ninguna (los veo aparte, con su propio tope)</option>
       </select>
       <small>Los que envías suman en esa categoría y los que te devuelven restan: si pagas una cena y te devuelven tu parte, cuenta solo lo tuyo.</small>
-    </label>
+    </label>` : ''}
   </section>`;
 }
 
@@ -1155,7 +1163,8 @@ function budgetStatus(spent, budget, elapsedFrac) {
 function budgetCard() {
   const b = state.settings.budgets || {};
   const cats = budgetCategories().filter(c => b[c] > 0);
-  if (!cats.length || !state.cycle) return '';
+  // Sin banco no hay gasto por categoría que enseñar (sería «0 € de 220 €» siempre): el presupuesto solo sirve para planificar
+  if (!cats.length || !state.cycle || !B.isReady()) return '';
   const info = C.cycleInfo(state.cycle, state.settings);
   const elapsedFrac = info.elapsed / info.totalDays;
   const sp = state.bankSpend?.cycleId === state.cycle.id ? state.bankSpend : null;
@@ -1181,7 +1190,7 @@ function budgetCard() {
   return `<section class="card">
     <h3>🎯 Presupuesto del ciclo</h3>
     ${sp ? `<p class="muted">Llevas <b>${money(Math.max(0, totalSpent))}</b> de ${money(budgetTotal())} · día ${info.elapsed} de ${info.totalDays}${bizumAside ? ` · <span class="pos">+${money(sp.bizumIn)} devueltos por Bizum</span>` : ''}</p>`
-      : `<p class="muted">${B.isReady() ? 'Se actualiza solo al traer el saldo del banco o al guardar una revisión.' : 'Conecta tu banco en Mi mes para ver cuánto llevas en cada categoría.'}</p>`}
+      : '<p class="muted">Se actualiza solo al traer el saldo del banco o al guardar una revisión.</p>'}
     ${rows}
     ${sp ? `<p class="note">Actualizado ${new Date(sp.at).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}. La rayita marca hasta dónde «tocaría» llevar gastado hoy.</p>` : ''}
   </section>`;
@@ -1225,9 +1234,10 @@ function bankSection() {
   const cfg = B.getConfig(), st = bankUI.status;
   let body;
   if (!cfg.password) {
-    body = `<p class="muted">Opcional: conecta tu cuenta para traer el saldo y ver tus movimientos sin escribirlos. Es <b>solo lectura</b>: nadie puede mover dinero. Siempre podrás seguir escribiendo el saldo a mano.</p>
-      <label class="field"><span>Contraseña del servidor</span>
-        <input type="password" id="bk-pass" autocomplete="current-password" placeholder="La que pusiste en Vercel"></label>
+    body = `<p class="muted"><b>No lo necesitas para usar Holgura</b>: todo funciona escribiendo el saldo de tu cuenta en cada revisión.</p>
+      <p class="note">Solo sirve si tienes tu propio servidor de Holgura conectado a tu banco (solo lectura: nadie puede mover dinero). Si no sabes qué es, ignora este apartado.</p>
+      <label class="field"><span>Contraseña de tu servidor</span>
+        <input type="password" id="bk-pass" autocomplete="current-password" placeholder="Contraseña del servidor"></label>
       <button class="btn primary block" data-act="bank-save-pass">Guardar</button>`;
   } else if (bankUI.loading && !st) {
     body = '<p class="muted">Comprobando la conexión…</p>';
