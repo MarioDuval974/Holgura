@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Holgura · conexión con el banco</title>
   <meta name="robots" content="noindex">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://holgura-api.vercel.app; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta name="referrer" content="no-referrer">
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -19,27 +21,6 @@
       <p class="privacy" id="hint" hidden>Si estás en Safari, cierra esta pestaña y abre Holgura desde tu pantalla de inicio.</p>
     </div>
   </main>
-  <script type="module">
-    import { finish } from './js/bank.js';
-    const $ = id => document.getElementById(id);
-    const show = (title, text) => { $('title').textContent = title; $('text').textContent = text; $('back').hidden = false; $('hint').hidden = false; };
-    const q = new URLSearchParams(location.search);
-
-    if (q.get('error')) {
-      show('No se ha conectado', 'Has cancelado la autorización o el banco ha dado un error. Puedes volver a intentarlo desde Holgura → Mi mes.');
-    } else if (!q.get('code')) {
-      show('Nada que conectar', 'Esta página solo se usa al volver del banco.');
-    } else {
-      try {
-        const r = await finish(q.get('code'), q.get('state'));
-        const until = r.validUntil ? new Date(r.validUntil).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
-        show('✅ Banco conectado', `Holgura ya puede leer tu saldo y tus movimientos${until ? ` hasta el ${until}` : ''}.`);
-        $('accounts').innerHTML = (r.accounts || []).map(a => `<p class="muted">🏦 ${a.name} ${a.iban}</p>`).join('');
-      } catch (err) {
-        show('No se ha conectado', err.message);
-      }
-      history.replaceState(null, '', location.pathname); // quita el código de la barra de direcciones
-    }
-  </script>
+  <script type="module" src="js/conectado.js"></script>
 </body>
 </html>

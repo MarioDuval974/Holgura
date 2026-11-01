@@ -38,13 +38,75 @@ export function defaultState() {
   };
 }
 
+// ---------- Normalizar datos (los guardados y las copias importadas) ----------
+
+const LISTS = ['checkins', 'history', 'jars', 'moves', 'rules', 'adjustments'];
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const ID = /^[\w-]{1,40}$/; // los ids van dentro de atributos HTML: solo letras, números, _ y -
+const isObj = v => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+const list = v => (Array.isArray(v) ? v.filter(isObj) : []);
+const num = (v, d) => (v !== null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : d);
+const oneOf = (v, options, d) => (options.includes(v) ? v : d);
+
+// Rellena lo que falte y corrige tipos, para que una copia incompleta no deje la app sin poder abrirse
+function normalize(data) {
+  const base = defaultState(), b = base.settings;
+  const s = { ...b, ...(isObj(data.settings) ? data.settings : {}) };
+  const out = { ...base, ...data, settings: s };
+  for (const k of LISTS) out[k] = list(out[k]);
+
+  s.salary = Math.max(0, num(s.salary, 0));
+  s.payDay = Math.min(31, Math.max(1, Math.round(num(s.payDay, b.payDay))));
+  s.fixedTotal = Math.max(0, num(s.fixedTotal, 0));
+  s.safetyPct = num(s.safetyPct, b.safetyPct);
+  s.weekendFactor = num(s.weekendFactor, b.weekendFactor);
+  s.cycleType = oneOf(s.cycleType, ['nomina', 'natural'], b.cycleType);
+  s.fixedMode = oneOf(s.fixedMode, ['total', 'desglose'], b.fixedMode);
+  s.allowanceView = oneOf(s.allowanceView, ['dia', 'semana'], b.allowanceView);
+  s.weekendMode = oneOf(s.weekendMode, ['auto', 'manual'], b.weekendMode);
+  s.reminderTime = /^\d{2}:\d{2}$/.test(s.reminderTime) ? s.reminderTime : b.reminderTime;
+  const f = { ...b.checkFreq, ...(isObj(s.checkFreq) ? s.checkFreq : {}) };
+  s.checkFreq = {
+    type: oneOf(f.type, ['diaria', 'cadaX', 'semanal', 'mensual'], b.checkFreq.type),
+    every: Math.max(1, num(f.every, b.checkFreq.every)),
+    weekday: Math.min(6, Math.max(0, num(f.weekday, b.checkFreq.weekday))),
+    monthDay: Math.min(28, Math.max(1, num(f.monthDay, b.checkFreq.monthDay))),
+  };
+  s.fixedItems = list(s.fixedItems).map(i => ({ ...i, amount: num(i.amount, 0) }));
+  s.budgets = isObj(s.budgets) ? s.budgets : {};
+
+  // Sin un ciclo válido no se puede pintar nada: se vuelve al asistente (huchas e historial se conservan)
+  const c = out.cycle;
+  if (isObj(c) && DATE.test(c.start)) {
+    out.cycle = {
+      ...c, startBalance: num(c.startBalance, 0), income: num(c.income, 0), fixedTotal: num(c.fixedTotal, 0),
+      fixedItems: list(c.fixedItems).map(i => ({ ...i, amount: num(i.amount, 0) })), extras: list(c.extras),
+    };
+  } else {
+    out.cycle = null;
+    out.setup = false;
+  }
+  out.checkins = out.checkins.filter(k => DATE.test(k.date));
+  out.moves = out.moves.filter(m => DATE.test(m.date)).map(m => ({ ...m, amount: num(m.amount, 0) }));
+  return out;
+}
+
+// Todos los ids de una copia: si alguno trae caracteres raros, la copia está manipulada o rota
+function badIds(d) {
+  const ids = [
+    d.cycle?.id, ...(d.cycle?.fixedItems || []).map(i => i.id), ...(d.cycle?.extras || []).map(e => e.id),
+    ...d.settings.fixedItems.map(i => i.id), ...d.jars.map(j => j.id), ...d.history.map(h => h.id),
+    ...d.moves.flatMap(m => [m.id, m.jarId, m.cycleId, m.carry]), ...d.checkins.flatMap(k => [k.id, k.cycleId, ...(k.pendingIds || [])]),
+  ];
+  return ids.some(id => id != null && typeof id !== 'boolean' && !ID.test(String(id)));
+}
+
 export function load() {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return defaultState();
     const data = JSON.parse(raw);
-    const base = defaultState();
-    return { ...base, ...data, settings: { ...base.settings, ...data.settings } };
+    return isObj(data) ? normalize(data) : defaultState();
   } catch {
     return defaultState();
   }
@@ -55,12 +117,13 @@ export function save(state) {
 }
 
 export function importData(text) {
-  const data = JSON.parse(text);
-  if (!data || typeof data !== 'object' || !data.settings || !Array.isArray(data.jars)) {
-    throw new Error('El archivo no es una copia de seguridad de Holgura');
-  }
-  const base = defaultState();
-  return { ...base, ...data, settings: { ...base.settings, ...data.settings } };
+  const invalid = () => new Error('El archivo no es una copia de seguridad de Holgura');
+  let data;
+  try { data = JSON.parse(text); } catch { throw invalid(); }
+  if (!isObj(data) || !isObj(data.settings) || !Array.isArray(data.jars)) throw invalid();
+  const out = normalize(data);
+  if (badIds(out)) throw new Error('La copia de seguridad tiene datos no válidos');
+  return out;
 }
 
 export function clearAll() {

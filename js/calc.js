@@ -268,7 +268,7 @@ export function recommendation(state, analysis = null) {
 
 // ---------- Gastos fijos "según banco" ----------
 
-// Los fijos con "key" (psicóloga, peluquería, tu madre…) no se marcan a mano: cuenta lo que de verdad
+// Los fijos con "key" (una consulta, una clase, un pago a un familiar…) no se marcan a mano: cuenta lo que de verdad
 // ha salido de la cuenta en el ciclo para ellos, según los movimientos del banco. Si no ha salido nada, no cuenta.
 export function trackedFixed(state, upTo = '9999-12-31') {
   const c = state.cycle, sp = state.bankSpend;
@@ -288,7 +288,7 @@ export function trackedFixed(state, upTo = '9999-12-31') {
     paidById[i.id] = round2(paid[i.key] || 0);
     backById[i.id] = round2(back[i.key] || 0);
     charged += a;
-    over += Math.max(0, a - i.amount); // p. ej. una segunda sesión de psicóloga: el fijo de este ciclo sube
+    over += Math.max(0, a - i.amount); // p. ej. una sesión de más: el fijo de este ciclo sube
   }
   return { byId, paidById, backById, ids: new Set(items.map(i => i.id)), charged: round2(charged), over: round2(over) };
 }
@@ -347,7 +347,7 @@ export function analyze(state, checkin) {
   const balance = checkin.balance - (Number(checkin.earlyIncome) || 0);
 
   // Lo gastado en el día a día = lo que ha bajado la cuenta, sin contar fijos, huchas ni ingresos extra
-  // Ajustes: de algún cargo solo cuenta una parte (p. ej. 27 € de lotería, 7 € con efectivo de tu madre)
+  // Ajustes: de algún cargo solo cuenta una parte (p. ej. un gasto compartido del que otra persona te devuelve su parte en efectivo)
   const notMine = sum((state.adjustments || []).filter(a => a.date >= c.start && a.date <= checkin.date),
     a => Math.abs(a.amount) - a.counted);
   // Puntuales (Hacienda, una venta…): no son gasto del día a día, pero cambian lo que te sobra
@@ -386,10 +386,18 @@ export function closeCycle(state, endDate, endBalance) {
   const moved = netToJars(state, c.id, endDate);
   const days = Math.max(1, diffDays(c.start, endDate));
   const oo = cycleOneOffs(state, endDate);
+  // Igual que en la revisión: los fijos "según banco" cuentan lo que de verdad salió (más o menos de lo previsto)
+  // y de los cargos con ajuste solo cuenta tu parte; si no, el gasto del día a día aprendido sale inflado
+  const tracked = trackedFixed(state, endDate);
+  const fixed = tracked
+    ? round2(c.fixedTotal - sum(c.fixedItems.filter(i => tracked.ids.has(i.id)), i => i.amount) + tracked.charged)
+    : c.fixedTotal;
+  const notMine = sum((state.adjustments || []).filter(a => a.date >= c.start && a.date <= endDate),
+    a => Math.abs(a.amount) - a.counted);
   return {
     id: c.id, start: c.start, end: endDate, days, startBalance: c.startBalance,
-    income: c.income + extra + oo.in, fixed: c.fixedTotal, oneOffOut: oo.out, goal: Number(c.savingsGoal) || 0,
-    variable: round2(Math.max(0, c.startBalance - endBalance - c.fixedTotal - moved + extra + oo.in - oo.out)),
+    income: c.income + extra + oo.in, fixed, oneOffOut: oo.out, goal: Number(c.savingsGoal) || 0,
+    variable: round2(Math.max(0, c.startBalance - endBalance - fixed - moved + extra - notMine + oo.in - oo.out)),
     saved: round2(netToJars(state, c.id, endDate, true)), endBalance: round2(endBalance),
   };
 }

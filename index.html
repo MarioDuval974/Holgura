@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Holgura</title>
+  <!-- Solo se ejecuta el código de la propia app y solo se habla con el servidor de Holgura -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://holgura-api.vercel.app; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="description" content="Controla tu mes de nómina a nómina, ahorra sin llegar justo y guarda tus ahorros en huchas.">
   <meta name="theme-color" content="#F4F6F3" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0F1412" media="(prefers-color-scheme: dark)">

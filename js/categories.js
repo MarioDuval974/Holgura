@@ -47,25 +47,25 @@ const DEFAULT_RULES = [
   ['Gimnasio', /BASIC.?FIT|GYM|FITNESS/],
   ['Telefonía', /SIMYO|MOVISTAR|VODAFONE|ORANGE|DIGI|LOWI|O2 /],
   ['Cuotas', /COMISSIO OBRER|CCOO|\bUGT\b|CUOTA SOCIO/],
-  ['Supermercado', /MERCADONA|LIDL|ALCAMPO|CARREF|CRF EXPRESS|CONDIS|\bDIA\b|CONSUM|BON PREU|ESCLAT|COVIRAN|SUPERMERCA|SUPERMARKET|ALDI|CAPRABO|EROSKI|AHORRAMAS|ALIMENTACI/],
+  ['Supermercado', /MERCADONA|LIDL|ALCAMPO|CARREF|CRF EXPRESS|CONDIS|\bDIA\b(?! ?\d{1,2}\b)|CONSUM|BON PREU|ESCLAT|COVIRAN|SUPERMERCA|SUPERMARKET|ALDI|CAPRABO|EROSKI|AHORRAMAS|ALIMENTACI/],
   ['Comida a domicilio', /GLOVO|JUST ?EAT|UBER ?EATS|DELIVEROO/],
   ['Fiesta y conciertos', /FESTIVAL|FESTVAL|TOMORROWLAND|MEDUSA|TICKET|DICE\.FM|PAYLOGIC|RESIDENT ADVISOR|SALA |DISCOTECA|CASHLESS|CINES?\b|MULTICINES|OKTOBERFEST|SUTTON|SHOKO|APOLO|LUZ DE GAS/],
   ['Viajes', /HOTEL|BOOKING|AIRBNB|VUELING|RYANAIR|IBERIA|RENFE|TRAINLINE|PETIT PALACE|AEROPUER/],
-  ['Transporte', /CABIFY|UBER|\bUBR\*|TAXI|METRO|TMB|MOBILITAT|BICING|MOTOSHAR|REPSOL|WAYLET|BENZINERA|ESCLATOIL|GASOLIN|CEPSA|GALP|SHELL|ESTACIONAMENT|PARKING|\bSABA\b|APPLUS|ITV/],
+  ['Transporte', /CABIFY|UBER|\bUBR\*|TAXI|METRO|TMB|MOBILITAT|BICING|MOTOSHAR|REPSOL|WAYLET|BENZINERA|ESCLATOIL|GASOLIN|CEPSA|GALP|SHELL|ESTACIONAMENT|PARKING|\bSABA\b|APPLUS|\bITV\b/],
   ['Compras', /AMAZON|ZARA|ZALANDO|ZALA NDO|DECATHLON|\bH&M|HM ES|LEFTIES|PRIMARK|PULL|BERSHKA|CORTE INGLES|DRUNI|SEPHORA|JACK AND JONES|TJX|SIVASDESCALZO|IKEA|MEDIA ?MARKT/],
   ['Salud y cuidado', /FARMACIA|PSICOLOG|CLINICA|DENTAL|OPTICA|PELUQUER/],
   ['Lotería', /LOTERO|LOTER[IÍ]A|ADMINISTRACION GI|APUESTA|BET365|CODERE/],
   ['Impuestos', /IMPUESTO|AJUNT|AYUNTAMIENTO|AGENCIA TRIBUTARIA|HACIENDA|DGT/],
-  ['Restaurantes y bares', /REST|BAR\b|BARS?\s|CAFE|CAFETER|TAPAS|BURGER|MC.?DONALD|\bBK\d|TACOS|PIZZ|SUSHI|CERVECER|VERMUT|GASTRO|CHIRINGUITO|BODEGA|TABERNA|EUREST|CHURRER|HELADER/],
+  ['Restaurantes y bares', /\bREST|BAR\b|BARS?\s|CAFE|CAFETER|TAPAS|BURGER|MC.?DONALD|\bBK\d|TACOS|PIZZ|SUSHI|CERVECER|VERMUT|GASTRO|CHIRINGUITO|BODEGA|TABERNA|EUREST|CHURRER|HELADER/],
 ];
 
 // Clasifica un movimiento {description, counterparty, amount}. Devuelve { category, label, fixed }.
-// fixed = ya está contado en los gastos fijos (p. ej. el efectivo de la psicóloga), así no se cuenta dos veces.
+// fixed = ya está contado en los gastos fijos (p. ej. un pago en efectivo ya previsto), así no se cuenta dos veces.
 // Nombre de empresa (no de persona): S.L., S.A., banco, etc.
 const COMPANY = /\b(S\.?\s?L\.?U?|S\.?\s?A\.?U?|S\.?\s?COOP|SPAIN|ESPA[ÑN]A|BANCO|BANK|LTD|GMBH|INC|SAS|SRL|SOCIEDAD|AYUNTAMIENTO|AJUNTAMENT|TESORERIA|AGENCIA)\b/;
 
 // Un Bizum por la conexión del banco trae como descripción el concepto que escribe la otra persona.
-// Se reconoce por: la palabra BIZUM en cualquier campo; el nombre de la persona enmascarado ("Daniel ***");
+// Se reconoce por: la palabra BIZUM en cualquier campo; el nombre de la persona enmascarado ("Nombre ***");
 // la referencia de Bizum (un número de 30 cifras o más); o una transferencia de/hacia una persona sin comercio de tarjeta.
 // Señales seguras: la palabra BIZUM, el nombre enmascarado o la referencia larga
 export function surelyBizum(tx) {
@@ -82,7 +82,7 @@ export function looksLikeBizum(tx) {
 }
 
 export function categorize(tx, rules = []) {
-  // El banco manda los nombres como "DANIEL;CADENAS;GUERRERO": se cambia el ; por espacio para que las reglas coincidan
+  // El banco manda los nombres como "NOMBRE;APELLIDO1;APELLIDO2": se cambia el ; por espacio para que las reglas coincidan
   const text = `${tx.description || ''} ${tx.counterparty || ''} ${tx.code || ''} ${tx.note || ''}`.replace(/;/g, ' ').toUpperCase();
   const abs = Math.round(Math.abs(Number(tx.amount) || 0) * 100) / 100;
   const matches = r => {
@@ -94,7 +94,7 @@ export function categorize(tx, rules = []) {
   };
   const result = r => ({
     category: r.category, label: r.label || null, fixed: Boolean(r.fixed) || FIXED_CATEGORIES.includes(r.category),
-    charge: r.charge || null, // a qué gastos fijos "según banco" corresponde (p. ej. 80 € → psicóloga 60 + peluquería 20)
+    charge: r.charge || null, // a qué gastos fijos "según banco" corresponde (p. ej. 80 € → consulta 60 + clase 20)
   });
   // Reglas "first": van incluso antes que el Bizum (p. ej. el Bizum de las plataformas, que se reparte a Spotify y Netflix)
   for (const r of rules) if (r.first && matches(r)) return result(r);
@@ -114,7 +114,7 @@ export function categorize(tx, rules = []) {
 
 // Lo gastado en el día a día por categoría y lo que te han devuelto por Bizum.
 // Las devoluciones (p. ej. el descuento de Waylet) restan de su propia categoría.
-// Reparte un importe entre gastos fijos: { psicologa: 60, peluqueria: 20 }, '*' = todo, 'rest' = lo que sobre,
+// Reparte un importe entre gastos fijos: { consulta: 60, clase: 20 }, '*' = todo, 'rest' = lo que sobre,
 // '50%' = la mitad (p. ej. el Bizum de las plataformas: mitad Spotify, mitad Netflix)
 export function splitCharge(charge, abs) {
   const out = {};

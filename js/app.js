@@ -461,7 +461,7 @@ function debtsCard() {
     ${pct != null ? `<p class="muted">El <b>${pct} %</b> de tu nómina se va en cuotas.</p>
       <div class="bar debt"><i style="width:${Math.min(100, pct)}%"></i></div>` : ''}
     <div class="rows compact">${items.map(i => `<div class="row"><span>${esc(i.name)}</span><strong>${money(i.amount)}</strong></div>`).join('')}</div>
-    ${items.some(i => /revolving/i.test(i.name)) ? '<p class="note">El revolving sube la cuota cada vez que dispones de dinero y suele tener intereses altos. Puedes consultar en Cetelem cuánto queda pendiente.</p>' : ''}
+    ${items.some(i => /revolving/i.test(i.name)) ? '<p class="note">El revolving sube la cuota cada vez que dispones de dinero y suele tener intereses altos. Consulta en tu financiera cuánto te queda pendiente.</p>' : ''}
   </section>`;
 }
 
@@ -588,7 +588,7 @@ function jarsSummary() {
   return `<section class="card">
     <div class="card-head"><h3>Huchas</h3><button class="link" data-act="tab" data-tab="huchas">Ver todas</button></div>
     <p class="big">${money(jarsTotal())}</p>
-    <div class="chips">${state.jars.slice(0, 4).map(j => `<button class="chip" data-act="jar-open" data-id="${j.id}">${j.emoji} ${esc(j.name)} · ${money(jarBalance(j.id))}</button>`).join('')}</div>
+    <div class="chips">${state.jars.slice(0, 4).map(j => `<button class="chip" data-act="jar-open" data-id="${j.id}">${esc(j.emoji)} ${esc(j.name)} · ${money(jarBalance(j.id))}</button>`).join('')}</div>
   </section>`;
 }
 
@@ -826,7 +826,7 @@ function viewHuchas() {
       const bal = jarBalance(j.id);
       const pct = j.goal ? Math.min(100, Math.max(0, (bal / j.goal) * 100)) : null;
       return `<button class="jar card" data-act="jar-open" data-id="${j.id}">
-        <span class="jar-emoji">${j.emoji}</span>
+        <span class="jar-emoji">${esc(j.emoji)}</span>
         <span class="jar-name">${esc(j.name)}</span>
         <strong class="jar-bal">${money(bal)}</strong>
         ${pct != null ? `<span class="bar"><i style="width:${pct}%"></i></span><small>${Math.round(pct)} % de ${money(j.goal)}</small>` : ''}
@@ -842,7 +842,7 @@ function openJar(id) {
   if (!j) return;
   const bal = jarBalance(id);
   const moves = state.moves.filter(m => m.jarId === id).reverse().sort((a, b) => b.date.localeCompare(a.date));
-  openSheet(`${j.emoji} ${esc(j.name)}`, `
+  openSheet(`${esc(j.emoji)} ${esc(j.name)}`, `
     <p class="big center">${money(bal)}</p>
     ${j.goal ? `<div class="goal"><div class="bar"><i style="width:${Math.min(100, Math.max(0, bal / j.goal * 100))}%"></i></div><p class="muted center">Objetivo: ${money(j.goal)}</p></div>` : ''}
     <div class="btn-row two">
@@ -901,7 +901,7 @@ function openMoveForm({ type = 'in', jarId = null, amount = '', carry = null } =
   openSheet(type === 'in' ? 'Ingresar en hucha' : 'Retirar de hucha', `
     ${seg('move-type', [['in', '＋ Ingreso'], ['out', '− Retirada']], type)}
     <label class="field"><span>Hucha</span><select id="mv-jar">
-      ${state.jars.map(j => `<option value="${j.id}" ${j.id === jarId ? 'selected' : ''}>${j.emoji} ${esc(j.name)} (${money(jarBalance(j.id))})</option>`).join('')}
+      ${state.jars.map(j => `<option value="${j.id}" ${j.id === jarId ? 'selected' : ''}>${esc(j.emoji)} ${esc(j.name)} (${money(jarBalance(j.id))})</option>`).join('')}
     </select></label>
     ${moneyField('Importe', 'id="mv-amount"', numStr(Number(amount) || 0))}
     <label class="field"><span>Fecha</span><input type="date" id="mv-date" value="${C.todayStr()}" max="${C.todayStr()}"></label>
@@ -1090,7 +1090,7 @@ function viewMiMes() {
         <span class="chev">›</span>
       </button>`).join('')}
     </section>
-    <p class="footer">Holgura · v3.4</p>`;
+    <p class="footer">Holgura · v3.5</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -1319,7 +1319,7 @@ async function startBankConnect(bank) {
 
 let txCache = []; // últimos movimientos mostrados (para ver el detalle de uno)
 
-// Ajustes: de un cargo solo cuenta una parte como gasto tuyo (p. ej. 27 € de lotería, 7 € con efectivo de tu madre)
+// Ajustes: de un cargo solo cuenta una parte como gasto tuyo (p. ej. un gasto compartido del que otra persona te devuelve su parte en efectivo)
 const adjKey = t => `${t.date}|${Math.round(Number(t.amount) * 100) / 100}`;
 function applyAdjustments(list) {
   return list.map(t => {
@@ -1382,7 +1382,7 @@ async function openTransactions() {
       </div>
       ${cats.length ? `<h3>En qué se ha ido</h3>
         ${cats.map(([cat, v]) => `<div class="cat-row">
-          <span>${icon(cat)} ${cat}</span><strong>${money(v)}</strong>
+          <span>${icon(cat)} ${esc(cat)}</span><strong>${money(v)}</strong>
           <span class="bar"><i style="width:${(v / max) * 100}%"></i></span>
         </div>`).join('')}` : ''}
       ${list.length ? days.map(d => `
@@ -1624,7 +1624,7 @@ const actions = {
       const b = await B.balance();
       $('#ck-balance').value = inputNum(b.amount);
       setLastBalance(b.amount, 'bank');
-      // De paso se leen los movimientos, para que los fijos "según banco" (psicóloga, madre…) estén al día
+      // De paso se leen los movimientos, para que los fijos "según banco" (los que pagas por transferencia o Bizum) estén al día
       await refreshSpend({ silent: true });
       if (tab === 'revisar') renderKeepingForm();
       const note = $('#bk-note');
@@ -1678,9 +1678,15 @@ document.addEventListener('change', e => {
     const kind = el.dataset.kind;
     let v = el.value;
     if (kind === 'money') v = Math.max(0, parseMoney(v) || 0);
-    if (kind === 'int') v = Math.max(1, parseInt(v, 10) || 1);
+    if (kind === 'int') {
+      // Los límites salen del propio campo: el día de la semana admite 0 (domingo)
+      const n = parseInt(v, 10);
+      v = Number.isFinite(n) ? n : Number(el.min || 1);
+      if (el.min) v = Math.max(Number(el.min), v);
+      if (el.max) v = Math.min(Number(el.max), v);
+    }
     if (kind === 'bool') v = el.checked;
-    if (el.dataset.bind === 'payDay') v = Math.min(31, v);
+    if (el.dataset.bind === 'reminderTime' && !v) { el.value = state.settings.reminderTime; return; }
     const prevSalary = state.settings.salary;
     setPath(state.settings, el.dataset.bind, v);
     if (el.dataset.bind === 'bizumTo') mergeBizumBudget();
@@ -1712,13 +1718,16 @@ document.addEventListener('change', e => {
   } else if (el.id === 'import-file' && el.files[0]) {
     el.files[0].text().then(text => {
       try {
-        const parsed = JSON.parse(text);
+        let parsed;
+        try { parsed = JSON.parse(text); } catch { throw new Error('El archivo no es una copia de seguridad de Holgura'); }
         if (parsed?.type === 'holgura-analisis') return applyAnalysis(parsed);
         const data = S.importData(text);
         if (!confirm('Se sustituirán los datos actuales por los de la copia. ¿Continuar?')) return;
         state = data;
+        // Si la copia no trae un ciclo válido se vuelve a empezar el asistente desde el principio
+        wizStep = 0; wizDraft = { start: null, balance: '' }; tab = 'inicio';
         commit();
-        toast('Copia de seguridad importada');
+        toast(state.setup ? 'Copia de seguridad importada' : 'Copia importada: falta el ciclo actual, vuelve a completar el inicio');
       } catch (err) {
         toast(err.message);
       } finally {
@@ -1738,14 +1747,29 @@ document.addEventListener('input', e => {
 // ---------- Render ----------
 
 function render() {
-  if (!state.setup) {
+  try {
+    if (!state.setup) {
+      tabbar.hidden = true;
+      view.innerHTML = viewWizard();
+      return;
+    }
+    tabbar.hidden = false;
+    view.innerHTML = { inicio: viewInicio, revisar: viewRevisar, huchas: viewHuchas, mimes: viewMiMes }[tab]();
+    tabbar.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  } catch (err) {
+    // Si algún dato raro rompe la pantalla, al menos se puede sacar una copia o empezar de cero
+    console.error(err);
     tabbar.hidden = true;
-    view.innerHTML = viewWizard();
-    return;
+    view.innerHTML = `<div class="wizard">
+      <h2>Algo ha fallado al mostrar tus datos</h2>
+      <p class="muted">Saca una copia de seguridad antes de nada y pásamela para revisarla. Si no tiene arreglo, puedes borrar los datos de este móvil y empezar de nuevo.</p>
+      <p class="note">${esc(err.message)}</p>
+      <div class="btn-col">
+        <button class="btn primary block" data-act="export">⬇️ Exportar copia de seguridad</button>
+        <button class="btn text danger block" data-act="reset">Borrar todos los datos</button>
+      </div>
+    </div>`;
   }
-  tabbar.hidden = false;
-  view.innerHTML = { inicio: viewInicio, revisar: viewRevisar, huchas: viewHuchas, mimes: viewMiMes }[tab]();
-  tabbar.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
 }
 
 // Al volver a la app (puede haber cambiado el día) se recalcula todo
