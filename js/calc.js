@@ -22,7 +22,7 @@ export function makeDate(y, m0, d) {
   return `${yy}-${pad(mm + 1)}-${pad(Math.min(d, daysInMonth(yy, mm)))}`;
 }
 
-const round2 = n => Math.round(n * 100) / 100;
+export const round2 = n => Math.round(n * 100) / 100;
 const sum = (arr, f = x => x) => arr.reduce((a, x) => a + (Number(f(x)) || 0), 0);
 
 // Gastos fijos de un mes normal (sin contar los que solo se cobran algunos meses, p. ej. trimestrales)
@@ -340,6 +340,27 @@ export function bankFixedSeen(state, upTo = '9999-12-31') {
   return out;
 }
 
+// Lo gastado en el día a día según los movimientos del banco, desde el inicio del ciclo hasta upTo (incluido):
+// todo lo que no es gasto fijo ni puntual, menos los Bizum que te devuelven si cuentan en una categoría.
+// null si no hay datos del banco de este ciclo.
+export function bankDayToDay(state, upTo = '9999-12-31') {
+  const c = state.cycle, sp = state.bankSpend;
+  if (!c || sp?.cycleId !== c.id || !sp.byDay) return null;
+  const back = state.settings.bizumTo ? sp.bizumByDay || {} : {};
+  let t = 0;
+  for (const [d, v] of Object.entries(sp.byDay)) if (d >= c.start && d <= upTo) t += v;
+  for (const [d, v] of Object.entries(back)) if (d >= c.start && d <= upTo) t -= v;
+  return round2(t);
+}
+
+// Día (local) en que se leyeron los movimientos del banco
+export function bankDataDate(state) {
+  const at = state.bankSpend?.at;
+  if (!at) return null;
+  const d = new Date(at);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 // Gastos fijos del ciclo contando lo que se haya pasado de lo previsto en los "según banco"
 export const cycleFixedTotal = (state, upTo) => (state.cycle?.fixedTotal || 0) + (trackedFixed(state, upTo)?.over || 0);
 
@@ -413,7 +434,10 @@ export function analyze(state, checkin) {
   // Puntuales (Hacienda, una venta…): no son gasto del día a día, pero cambian lo que te sobra
   const oo = cycleOneOffs(state, checkin.date);
   const variable = c.startBalance - balance - fixedCharged - moved + extra - notMine + oo.in - oo.out;
-  const spent = Math.max(0, variable);
+  // Con los movimientos del banco leídos ese día (o después), lo gastado es la suma de tus cargos del día a día:
+  // así cuadra con el presupuesto por categorías. Si no, se calcula con lo que ha bajado el saldo.
+  const fromBank = bankDataDate(state) >= checkin.date ? bankDayToDay(state, checkin.date) : null;
+  const spent = Math.max(0, fromBank ?? variable);
   const observedDaily = spent / elapsed;
 
   const margin = c.income + extra + oo.in - oo.out - fixedTotal; // lo que te sobra tras los fijos y los puntuales
@@ -431,7 +455,7 @@ export function analyze(state, checkin) {
 
   return {
     status, elapsed, remaining, totalDays: info.totalDays, end: info.end,
-    variable: round2(variable), spent: round2(spent), observedDaily, daily: observedDaily,
+    variable: round2(variable), spent: round2(spent), source: fromBank != null ? 'bank' : 'balance', observedDaily, daily: observedDaily,
     margin, goal, available, expected, left: available - spent, saved, extra, pendingFixed,
     planGoal: spendingPlan(available - spent, from, info.end, s), // para cumplir el objetivo de ahorro
     planNoJar: spendingPlan(margin - spent, from, info.end, s),   // para no tocar las huchas

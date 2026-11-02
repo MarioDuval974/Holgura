@@ -192,7 +192,8 @@ function allowanceBlock(a) {
     } else {
       inner = `<strong>${money(plan.thisWeek)}</strong>`;
     }
-    body = `<div class="allow-grid one week"><div><span>Esta semana<small>${range}</small></span>${inner}</div></div>`;
+    body = `<div class="allow-grid one week"><div ${live ? `class="tappable" data-act="week-charges" data-from="${live.week.from}" role="button"` : ''}>
+      <span>Esta semana${live ? ' <i class="chev">›</i>' : ''}<small>${range}</small></span>${inner}</div></div>`;
   } else if (C.effectiveSettings(state).weekendFactor === 1) {
     body = `<div class="allow-grid one"><div><span>Cada día</span><strong>${money(plan.weekday)}</strong>
       ${live ? progress('Hoy llevas', live.today.spent, live.today.allowance) : ''}</div></div>`;
@@ -438,12 +439,46 @@ function viewSpentDetail(a, k) {
     && i.day && C.chargeDateInCycle(i, c.start) <= k.date
     && !(k.trackedChecked && !(k.pendingIds || []).includes(i.id))) : [];
 
+  const byBank = a.source === 'bank';
+  const diff = C.round2(a.variable - a.spent);
   let html = `<header class="top">
       <button class="link back" data-act="spent-back">‹ Inicio</button>
       <h1 class="sub-title">🧾 Lo gastado este ciclo</h1>
-    </header>
+    </header>`;
+
+  // Lo gastado, por categoría, con los movimientos del banco (si los hay, es lo que usa el semáforo)
+  const sp = state.bankSpend?.cycleId === c.id ? state.bankSpend : null;
+  let bankHtml = '';
+  if (sp) {
+    const { rows, back } = bankCategoryRows(sp);
+    const total = byBank ? a.spent : C.round2(sum(rows, r => r.net) - back);
+    const later = byBank ? C.round2(sum(rows, r => r.net) - back - a.spent) : 0;
+    const budgets = state.settings.budgets || {};
+    bankHtml = `<section class="card">
+      <h3>${byBank ? 'En qué lo has gastado' : 'Según tus movimientos del banco'}</h3>
+      <p class="muted">Tus cargos del día a día por categoría desde el ${dayFmt(c.start)}, sin los gastos fijos. Toca una para ver sus cargos.</p>
+      <div class="rows compact">
+        ${rows.map(r => {
+          const note = [
+            r.back ? `${money(r.gross)} − ${money(r.back)} devuelto por Bizum` : '',
+            budgets[r.cat] > 0 ? `de ${money(budgets[r.cat])} de presupuesto` : 'sin presupuesto',
+          ].filter(Boolean).join(' · ');
+          return `<div class="row tappable" data-act="cat-open" data-cat="${esc(r.cat)}" role="button">
+            <span>${icon(r.cat)} ${esc(r.cat)} <i class="chev">›</i>${note ? `<small>${note}</small>` : ''}</span><strong>${money(r.net)}</strong></div>`;
+        }).join('')}
+        ${back ? line('Bizum recibidos', minus(back)) : ''}
+        ${line(byBank ? `Gastado hasta el ${dayFmt(k.date)}` : 'Total en el banco', money(total), 'total')}
+      </div>
+      ${Math.abs(later) >= 0.01 ? `<p class="note">Las categorías incluyen ${money(Math.abs(later))} de cargos de después de tu última revisión; contarán en la siguiente.</p>` : ''}
+      ${!byBank && Math.abs(a.variable - total) >= 1 ? `<p class="note">Hay <b>${money(Math.abs(a.variable - total))}</b> de diferencia con el cálculo por saldo: suele ser algún fijo marcado que aún no ha salido o algún cargo que el banco aún no ha traído.</p>` : ''}
+      <button class="btn ghost block" data-act="bank-tx">Ver movimientos</button>
+    </section>`;
+  }
+  if (byBank) html += bankHtml;
+
+  html += `
     <section class="card">
-      <h3>Cómo lo calculo</h3>
+      ${byBank ? `<details class="analysis"><summary><h3>Comprobación con tu saldo · ${Math.abs(diff) < 1 ? 'cuadra ✓' : `${money(Math.abs(diff))} de diferencia`}</h3><span class="chev">›</span></summary>` : '<h3>Cómo lo calculo</h3>'}
       <p class="muted">Miro cuánto ha bajado tu cuenta desde que cobraste y le quito lo que no es gasto del día a día.</p>
       <div class="rows breakdown">
         ${line('Saldo al empezar el ciclo', money(d.startBalance), '', dayFmt(c.start))}
@@ -454,10 +489,14 @@ function viewSpentDetail(a, k) {
         ${ooNet ? line(ooNet > 0 ? 'Gastos puntuales' : 'Ingresos puntuales', ooNet > 0 ? minus(ooNet) : plus(-ooNet)) : ''}
         ${d.moved ? line(d.moved > 0 ? 'Pasado a tus huchas' : 'Sacado de tus huchas', d.moved > 0 ? minus(d.moved) : plus(-d.moved)) : ''}
         ${d.notMine ? line('Partes que no son tuyas', minus(d.notMine), '', 'gastos compartidos que te devolvieron en efectivo') : ''}
-        ${line('Gastado en el día a día', money(a.variable), 'total')}
+        ${line(byBank ? 'Según tu saldo' : 'Gastado en el día a día', money(a.variable), 'total')}
       </div>
+      ${byBank && Math.abs(diff) >= 1 ? `<p class="note">${diff > 0
+        ? `Por saldo sale ${money(diff)} más que sumando tus cargos: suele ser algún gasto fijo marcado como cobrado que aún no ha salido, o uno sin marcar que sí salió.`
+        : `Por saldo sale ${money(-diff)} menos que sumando tus cargos: suele ser algún gasto fijo marcado como cobrado que no lo estaba, o contado dos veces.`} Revisa las casillas de tu última revisión.</p>` : ''}
       ${notYet.length ? `<p class="note">Según tu banco aún no te han cobrado <b>${notYet.map(i => esc(i.name || 'Sin nombre')).join(', ')}</b>, así que de momento cuenta${notYet.length > 1 ? 'n' : ''} como gasto del día a día. Si ya te ${notYet.length > 1 ? 'los' : 'lo'} han cobrado, márca${notYet.length > 1 ? 'los' : 'lo'} en tu próxima revisión, o búscalo en <b>Ver movimientos</b> y asígnalo a su gasto fijo para que se marque solo.</p>` : ''}
       ${a.variable < 0 ? '<p class="note">Sale negativo: ha bajado menos la cuenta de lo que suman los fijos. Puede que algún fijo marcado como cobrado aún no haya salido.</p>' : ''}
+      ${byBank ? '</details>' : ''}
     </section>`;
 
   if (d.fixedList.length) {
@@ -475,35 +514,7 @@ function viewSpentDetail(a, k) {
     </section>`;
   }
 
-  // Lo mismo visto con los movimientos del banco, por categoría (aunque no tengan presupuesto)
-  const sp = state.bankSpend?.cycleId === c.id ? state.bankSpend : null;
-  if (sp) {
-    const to = bizumTo();
-    const cats = Object.keys(sp.byCat).filter(cat => !(cat === 'Bizum' && to));
-    if (to && !cats.includes(to) && (sp.byCat.Bizum || sp.bizumIn)) cats.push(to);
-    const rows = cats.map(cat => ({ cat, ...netSpent(cat, sp) })).filter(r => Math.abs(r.net) >= 0.005).sort((x, y) => y.net - x.net);
-    const back = to ? 0 : sp.bizumIn || 0;
-    const total = sum(rows, r => r.net) - back;
-    const budgets = state.settings.budgets || {};
-    const diff = a.variable - total;
-    html += `<section class="card">
-      <h3>Según tus movimientos del banco</h3>
-      <p class="muted">Tus cargos del día a día por categoría, hasta el ${dateFmt(sp.at.slice(0, 10), { day: 'numeric', month: 'long' })}.</p>
-      <div class="rows compact">
-        ${rows.map(r => line(`${icon(r.cat)} ${esc(r.cat)}`, money(r.net), '', [
-          r.back ? `${money(r.gross)} − ${money(r.back)} devuelto por Bizum` : '',
-          budgets[r.cat] > 0 ? '' : 'sin presupuesto',
-        ].filter(Boolean).join(' · '))).join('')}
-        ${back ? line('Bizum recibidos', minus(back)) : ''}
-        ${line('Total en el banco', money(total), 'total')}
-      </div>
-      ${Math.abs(diff) >= 1 ? `<p class="note">Hay <b>${money(Math.abs(diff))}</b> de diferencia con el cálculo por saldo. ${diff > 0
-        ? 'Suele ser algún fijo que ha salido por un importe distinto, un cargo que aún no ha llegado al banco o gastos de antes de la última revisión que el banco aún no ha traído.'
-        : 'Suele ser algún gasto de después de tu última revisión (el banco ya lo trae, el saldo de la revisión no) o un fijo que el banco no ha reconocido como tal.'}</p>` : ''}
-      ${rows.some(r => !(budgets[r.cat] > 0)) ? '<p class="note">Las categorías «sin presupuesto» cuentan como gasto del día a día pero no salen en tu presupuesto del ciclo: por eso lo gastado puede no cuadrar con la suma del presupuesto.</p>' : ''}
-      <button class="btn ghost block" data-act="bank-tx">Ver movimientos</button>
-    </section>`;
-  }
+  if (!byBank) html += bankHtml;
   return html;
 }
 
@@ -1207,7 +1218,7 @@ function viewMiMes() {
         <span class="chev">›</span>
       </button>`).join('')}
     </section>
-    <p class="footer">Holgura · v3.9</p>`;
+    <p class="footer">Holgura · v3.11</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -1265,6 +1276,15 @@ function netSpent(cat, sp) {
   return { gross, sent, back, net: Math.max(0, Math.round((gross - back) * 100) / 100) };
 }
 
+// Gasto del día a día por categoría (con y sin presupuesto), de mayor a menor, y los Bizum devueltos que van aparte
+function bankCategoryRows(sp) {
+  const to = bizumTo();
+  const cats = Object.keys(sp.byCat).filter(cat => !(cat === 'Bizum' && to));
+  if (to && !cats.includes(to) && (sp.byCat.Bizum || sp.bizumIn)) cats.push(to);
+  const rows = cats.map(cat => ({ cat, ...netSpent(cat, sp) })).filter(r => Math.abs(r.net) >= 0.005).sort((x, y) => y.net - x.net);
+  return { rows, back: to ? 0 : sp.bizumIn || 0 };
+}
+
 function budgetStatus(spent, budget, elapsedFrac) {
   if (spent > budget) return 'red';
   if (spent / budget > Math.min(1, elapsedFrac + 0.15)) return 'yellow';
@@ -1274,14 +1294,18 @@ function budgetStatus(spent, budget, elapsedFrac) {
 function budgetCard() {
   const b = state.settings.budgets || {};
   const cats = budgetCategories().filter(c => b[c] > 0);
-  // Sin banco no hay gasto por categoría que enseñar (sería «0 € de 220 €» siempre): el presupuesto solo sirve para planificar
-  if (!cats.length || !state.cycle || !B.isReady()) return '';
+  const sp = state.bankSpend?.cycleId === state.cycle?.id ? state.bankSpend : null;
+  // Sin banco (ni datos suyos guardados) no hay gasto por categoría que enseñar: el presupuesto solo sirve para planificar
+  if (!cats.length || !state.cycle || !(B.isReady() || sp)) return '';
   const info = C.cycleInfo(state.cycle, state.settings);
   const elapsedFrac = info.elapsed / info.totalDays;
-  const sp = state.bankSpend?.cycleId === state.cycle.id ? state.bankSpend : null;
   const remainingDays = Math.max(1, info.remaining);
-  const totalSpent = sp ? sum(cats, c => netSpent(c, sp).net) : 0;
-  const bizumAside = sp?.bizumIn && !(bizumTo() && cats.includes(bizumTo()));
+  // El total es lo mismo que el «Llevas» del semáforo: todo el día a día, tenga o no presupuesto, frente a lo que te sobra
+  const totalSpent = sp ? C.bankDayToDay(state) ?? 0 : 0;
+  const avail = dayToDayAvailable();
+  const extraRows = sp ? bankCategoryRows(sp).rows.filter(r => !cats.includes(r.cat)) : [];
+  const bizumAside = sp?.bizumIn && !bizumTo();
+  const diff = avail - budgetTotal();
 
   const rows = cats.map(cat => {
     const budget = b[cat];
@@ -1290,8 +1314,8 @@ function budgetCard() {
     const st = budgetStatus(Math.max(0, spent), budget, elapsedFrac);
     // Por categoría se entiende mejor por semana que por día (1,50 €/día en bares no dice mucho)
     const pace = left > 0 && remainingDays > 7 ? `(≈ ${money((left / remainingDays) * 7)}/semana)` : '';
-    return `<div class="budget-item">
-      <div class="budget-top"><span>${icon(cat)} ${cat}</span><strong>${money(Math.max(0, spent))} <small>de ${money(budget)}</small></strong></div>
+    return `<div class="budget-item ${sp ? 'tappable' : ''}" ${sp ? `data-act="cat-open" data-cat="${esc(cat)}" role="button"` : ''}>
+      <div class="budget-top"><span>${icon(cat)} ${cat}${sp ? ' <i class="chev">›</i>' : ''}</span><strong>${money(Math.max(0, spent))} <small>de ${money(budget)}</small></strong></div>
       <span class="bar budget-${st}"><i style="width:${Math.min(100, Math.max(0, spent / budget) * 100)}%"></i><b style="left:${Math.min(100, elapsedFrac * 100)}%"></b></span>
       ${back || sent ? `<small>${money(gross)} gastado${sent ? ` (${money(sent)} por Bizum)` : ''}${back ? ` <span class="pos">− ${money(back)} devuelto por Bizum</span>` : ''}</small>` : ''}
       <small class="${st === 'red' ? 'neg' : ''}">${left >= 0 ? `Te quedan ${money(left)} ${pace}` : `Te has pasado ${money(-left)}`}</small>
@@ -1300,11 +1324,64 @@ function budgetCard() {
 
   return `<section class="card">
     <h3>🎯 Presupuesto del ciclo</h3>
-    ${sp ? `<p class="muted">Llevas <b>${money(Math.max(0, totalSpent))}</b> de ${money(budgetTotal())} · día ${info.elapsed} de ${info.totalDays}${bizumAside ? ` · <span class="pos">+${money(sp.bizumIn)} devueltos por Bizum</span>` : ''}</p>`
+    ${sp ? `<p class="muted">Llevas <b>${money(Math.max(0, totalSpent))}</b> de los <b>${money(avail)}</b> que te sobran tras los fijos · día ${info.elapsed} de ${info.totalDays}${bizumAside ? ` · <span class="pos">−${money(sp.bizumIn)} devueltos por Bizum</span>` : ''}</p>`
       : '<p class="muted">Se actualiza solo al traer el saldo del banco o al guardar una revisión.</p>'}
+    ${Math.abs(diff) >= 1 ? `<p class="note">${diff > 0
+      ? `Tus categorías reparten ${money(budgetTotal())}: te quedan ${money(diff)} sin repartir.`
+      : `Tus categorías reparten ${money(budgetTotal())}, ${money(-diff)} más de lo que te sobra. Ajusta los topes en Mi mes → Presupuesto del día a día.`}</p>` : ''}
     ${rows}
-    ${sp ? `<p class="note">Actualizado ${new Date(sp.at).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}. La rayita marca hasta dónde «tocaría» llevar gastado hoy.</p>` : ''}
+    ${extraRows.length ? `<div class="rows compact budget-extra">${extraRows.map(r => `
+      <div class="row tappable" data-act="cat-open" data-cat="${esc(r.cat)}" role="button">
+        <span>${icon(r.cat)} ${esc(r.cat)} <i class="chev">›</i><small>sin presupuesto</small></span><strong>${money(r.net)}</strong></div>`).join('')}</div>` : ''}
+    ${sp ? `<p class="note">Actualizado ${new Date(sp.at).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}. La rayita marca hasta dónde «tocaría» llevar gastado hoy. Toca una categoría para ver sus cargos.</p>` : ''}
   </section>`;
+}
+
+// ---------- Cargos por categoría ----------
+
+// Lo justo de cada movimiento del ciclo para poder enseñar los cargos de una categoría sin volver a llamar al banco
+const compactTxs = txs => txs.filter(t => t.date).map(t => ({
+  date: t.date, amount: t.amount, ...(t.original != null && t.original !== t.amount ? { original: t.original } : {}),
+  text: String(t.description || t.counterparty || '').replace(/;/g, ' ').slice(0, 80),
+  category: t.category, ...(t.label ? { label: t.label } : {}), ...(t.fixed ? { fixed: true } : {}),
+}));
+
+// Movimientos que cuentan como gasto del día a día (mismo criterio que el presupuesto), con lo que suma cada uno:
+// lo que sale suma; las devoluciones de una categoría restan; los Bizum que te devuelven restan si van a una categoría
+function dayToDayTxs(sp, { from = '0000', to = '9999', cat = null } = {}) {
+  const to_ = bizumTo();
+  return (sp.txs || []).filter(t => t.date >= from && t.date <= to && !t.fixed && t.category !== 'Impuestos').map(t => {
+    if (t.category === 'Bizum' && t.amount > 0) return to_ ? { ...t, counts: -t.amount, as: to_, back: true } : null;
+    if (t.amount > 0 && !BUDGET_CATEGORIES.includes(t.category)) return null;
+    return { ...t, counts: -t.amount, as: t.category === 'Bizum' && to_ ? to_ : t.category };
+  }).filter(t => t && (!cat || t.as === cat || (cat === 'Bizum' && !to_ && t.category === 'Bizum')))
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+// Hoja con los cargos de una lista, agrupados por día, y lo que suman
+function openChargesSheet(title, sub, list) {
+  const total = sum(list, t => t.counts);
+  const days = [...new Set(list.map(t => t.date))];
+  openSheet(title, `
+    <p class="muted center">${sub}</p>
+    <p class="big center">${money(Math.max(0, total))}</p>
+    ${list.length ? days.map(d => `<h3>${dayFmt(d)}</h3>
+      <div class="list">${list.filter(t => t.date === d).map(t => `
+        <div class="list-row">
+          <span class="mv ${t.counts < 0 ? 'in' : 'out'}">${icon(t.category)}</span>
+          <span class="grow tx-desc">${esc(t.text || t.label || t.category)}<small>${esc(t.back ? 'Bizum que te devuelven' : t.label || t.category)}${t.original != null ? ` · cargo de ${money(Math.abs(t.original))}` : ''}</small></span>
+          <strong class="${t.counts < 0 ? 'pos' : 'neg'}">${t.counts < 0 ? '− ' : ''}${money(Math.abs(t.counts))}</strong>
+        </div>`).join('')}</div>`).join('')
+      : '<p class="muted center">No hay cargos.</p>'}
+    <p class="note">${list.some(t => t.back) ? 'Los Bizum que te devuelven restan. ' : ''}De los cargos con ajuste solo cuenta tu parte.</p>`);
+}
+
+function openCategoryCharges(cat) {
+  const sp = state.bankSpend?.cycleId === state.cycle?.id ? state.bankSpend : null;
+  if (!sp?.txs) {
+    return openSheet(`${icon(cat)} ${cat}`, '<p class="muted center">Aún no tengo guardados los cargos de este ciclo. Pulsa «Traer saldo del banco» en Revisar y aparecerán aquí.</p>');
+  }
+  openChargesSheet(`${icon(cat)} ${cat}`, `Desde el ${dayFmt(state.cycle.start)}`, dayToDayTxs(sp, { cat }));
 }
 
 // Si los Bizum van a una categoría, su tope propio se suma a esa categoría (el reparto total no cambia)
@@ -1322,7 +1399,7 @@ async function refreshSpend({ silent = false, list = null } = {}) {
   if (!c || !B.isReady()) return;
   try {
     const txs = list || applyAdjustments((await B.transactions(c.start)).transactions.map(t => ({ ...t, ...categorize(t, state.rules) })));
-    state.bankSpend = { cycleId: c.id, at: new Date().toISOString(), ...spendByCategory(txs) };
+    state.bankSpend = { cycleId: c.id, at: new Date().toISOString(), ...spendByCategory(txs), txs: compactTxs(txs) };
     persist();
     const b = state.settings.budgets || {};
     const info = C.cycleInfo(c, state.settings);
@@ -1496,10 +1573,13 @@ function openTxDetail(i) {
 
 // Patrón para reconocer el concepto de un movimiento en los meses siguientes: se saltan las fechas y las
 // referencias largas (cambian cada mes), pero se mantienen los números cortos (p. ej. el final de un préstamo)
+// Si el concepto no trae ninguna palabra (p. ej. solo «/»), se usa el ordenante o beneficiario; si tampoco, no hay patrón
 function conceptPattern(t) {
-  const words = String(t.description || t.counterparty || '').replace(/;/g, ' ').toUpperCase().split(/\s+/)
+  const words = s => String(s || '').replace(/;/g, ' ').toUpperCase().split(/\s+/)
     .filter(w => w && !/\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}/.test(w) && !/\d{6,}/.test(w)).slice(0, 8);
-  return words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+  const hasWord = ws => ws.some(w => /[A-ZÀ-Ý]{2}/.test(w));
+  const ws = [words(t.description), words(t.counterparty)].find(hasWord);
+  return ws ? ws.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') : '';
 }
 
 // Manda a una categoría todos los movimientos con el mismo concepto. Va detrás de las reglas de gastos fijos
@@ -1828,6 +1908,13 @@ const actions = {
     persist();
     toast(`Asignado a ${state.settings.fixedItems.find(f => f.id === fixedId)?.name || 'ese gasto'}`);
     openTransactions(); // vuelve a la lista y recalcula presupuesto y fijos con la regla nueva
+  },
+  'cat-open': el => openCategoryCharges(el.dataset.cat),
+  'week-charges': el => {
+    const sp = state.bankSpend;
+    if (!sp?.txs || sp.cycleId !== state.cycle?.id) return openCategoryCharges('');
+    const from = el.dataset.from, to = C.todayStr();
+    openChargesSheet('Esta semana', `Del ${dayFmt(from)} a hoy · todo lo del día a día`, dayToDayTxs(sp, { from, to }));
   },
   'tx-categorize': el => {
     const t = txCache[Number(el.dataset.i)];

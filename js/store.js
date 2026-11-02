@@ -87,6 +87,8 @@ function normalize(data) {
     out.setup = false;
   }
   out.checkins = out.checkins.filter(k => DATE.test(k.date));
+  // Una regla sin al menos dos letras seguidas («/», «-»…) coincide con casi todo y se queda cargos que no son suyos
+  out.rules = out.rules.filter(r => typeof r.match === 'string' && /[A-Za-zÀ-ÿ]{2}/.test(r.match));
   out.moves = out.moves.filter(m => DATE.test(m.date)).map(m => ({ ...m, amount: num(m.amount, 0) }));
   return out;
 }

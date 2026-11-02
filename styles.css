@@ -408,3 +408,10 @@ details.more[open] summary::before { content: '－ '; }
 .week-left { display: block; margin-top: 6px; font-size: 13px; color: var(--muted); }
 
 .tx-desc small .tap { color: var(--brand); font-weight: 600; }
+
+/* Filas que se pueden tocar para ver sus cargos */
+.tappable { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.tappable:active { opacity: .7; }
+.tappable .chev, .budget-top .chev { font-style: normal; color: var(--muted); font-weight: 400; margin-left: 2px; }
+
+.budget-extra { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 4px; }
