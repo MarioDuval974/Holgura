@@ -415,3 +415,42 @@ details.more[open] summary::before { content: '－ '; }
 .tappable .chev, .budget-top .chev { font-style: normal; color: var(--muted); font-weight: 400; margin-left: 2px; }
 
 .budget-extra { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 4px; }
+
+/* Revisar: los gastos fijos, plegados para que la pantalla no sea tan larga */
+details.fixed-fold { background: var(--field); border-radius: 12px; padding: 10px 12px; }
+details.fixed-fold summary { display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none; }
+details.fixed-fold summary::-webkit-details-marker { display: none; }
+details.fixed-fold summary > .grow > span { display: block; }
+details.fixed-fold summary small { display: block; margin-top: 2px; color: var(--muted); font-size: 13px; }
+details.fixed-fold .chev { color: var(--muted); font-size: 20px; transition: transform .2s; }
+details.fixed-fold[open] .chev { transform: rotate(90deg); }
+details.fixed-fold[open] summary { margin-bottom: 8px; }
+details.fixed-fold .check { background: var(--card); }
+
+/* Nombre de la app en Inicio: el icono como «H» y el resto con un degradado verde */
+.brand { display: inline-flex; align-items: center; gap: 1px; font-size: 36px; font-weight: 800; letter-spacing: -.03em; line-height: 1.25; }
+.brand-h { width: 40px; height: 40px; border-radius: 11px; flex: none; box-shadow: 0 4px 12px rgba(14, 124, 102, .28); }
+.brand > span {
+  background: linear-gradient(100deg, #0E7C66 0%, #1E9E6A 45%, #3CC49A 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent; padding: 0 .04em .14em 0; margin-bottom: -.14em;
+}
+@media (prefers-color-scheme: dark) {
+  .brand > span { background-image: linear-gradient(100deg, #3CC49A 0%, #6FDDB4 55%, #A7F0D2 100%); }
+  .brand-h { box-shadow: 0 4px 14px rgba(60, 196, 154, .25); }
+}
+
+/* Revisar: revisiones del ciclo plegadas, con la última en el resumen */
+.checkins-fold summary small { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.checkins-fold[open] summary { margin-bottom: 10px; }
+.checkins-fold .list-row .grow small { margin-top: 1px; font-size: 12px; }
+
+/* Resultado de una revisión: lo gastado, los días y los fijos pendientes de ese día */
+.result-sum { margin-top: 12px; }
+.sum-block { margin-bottom: 10px; }
+.sum-block > span:first-child { font-size: 14px; font-weight: 600; }
+.result-sum .row strong small { display: block; text-align: right; font-weight: 400; margin-top: 0; font-size: 12px; }
+.pend-fold { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
+.pend-fold summary small { margin-top: 1px; }
+.pend-fold summary > .grow > span { color: var(--muted); }
+.pend-fold[open] summary { margin-bottom: 6px; }
+.result-sum .row strong { text-align: right; }

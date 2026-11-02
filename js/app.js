@@ -95,6 +95,8 @@ function syncCycle(prevSalary) {
 // ---------- Componentes ----------
 
 const header = (title, sub = '') => `<header class="top"><h1>${title}</h1>${sub ? `<p class="sub">${sub}</p>` : ''}</header>`;
+// El nombre de la app en Inicio: el icono hace de «H»
+const BRAND_TITLE = '<span class="brand" aria-label="Holgura"><img class="brand-h" src="icons/icon-192.png" alt=""><span aria-hidden="true">olgura</span></span>';
 
 const seg = (path, options, current, cls = '') => `
   <div class="seg ${cls}" role="radiogroup">
@@ -171,18 +173,18 @@ const progress = (label, spent, allowance) => `
   </div>`;
 
 // Lo que puedes gastar a partir de la revisión, por día (entre semana / fin de semana) o por semana
-function allowanceBlock(a) {
+function allowanceBlock(a, useLive = true) {
   const s = state.settings;
   if (a.remaining <= 0) return '';
   const useGoal = a.goal > 0 && a.planGoal.weekday > 0;
-  const live = livePlan(useGoal);
+  const live = useLive ? livePlan(useGoal) : null; // en una revisión antigua, sin los datos de hoy
   const plan = live ? live.plan : useGoal ? a.planGoal : a.planNoJar;
   let body;
   if (s.allowanceView === 'semana') {
     // Todo en una: lo que llevas gastado esta semana, en grande, frente a lo que puedes gastar
     const range = live
       ? `del ${dateFmt(live.week.from, { weekday: 'short', day: 'numeric' })} al ${dateFmt(live.week.until, { weekday: 'short', day: 'numeric' })}`
-      : `de hoy al ${dayFmt(plan.weekUntil)}`;
+      : useLive ? `de hoy al ${dayFmt(plan.weekUntil)}` : `del ${dayFmt(C.addDays(state.cycle.start, a.elapsed))} al ${dayFmt(plan.weekUntil)}`;
     let inner;
     if (live) {
       const { spent, allowance } = live.week, left = allowance - Math.max(0, spent);
@@ -221,7 +223,7 @@ function planSummary(plan, perDay) {
   return `≈ ${money(plan.weekday)}/día entre semana y ${money(plan.weekend)}/día el fin de semana`;
 }
 
-function statusBlock(a, k) {
+function statusBlock(a, k, { live = true } = {}) {
   const st = STATUS[a.status];
   return `
     <section class="card status status-${a.status}">
@@ -230,8 +232,8 @@ function statusBlock(a, k) {
         <div><h2>${st.title}</h2><p class="muted">Revisión del ${dayFmt(k.date)} · saldo ${money(k.balance)}</p></div>
       </div>
       <p class="status-text">${statusMessage(a)}</p>
-      <button class="link spent-link" data-act="spent-open">¿De dónde salen estos ${money(a.spent)}? ›</button>
-      ${allowanceBlock(a)}
+      ${live ? `<button class="link spent-link" data-act="spent-open">¿De dónde salen estos ${money(a.spent)}? ›</button>` : ''}
+      ${allowanceBlock(a, live)}
       <div class="stats">
         <div><span>Gastado este ciclo</span><strong>${money(a.spent)}</strong></div>
         <div><span>Te queda</span><strong class="${a.left < 0 ? 'neg' : ''}">${money(a.left)}</strong></div>
@@ -527,7 +529,7 @@ function viewInicio() {
   const rec = C.recommendation(state, a);
   const natural = s.cycleType === 'natural';
 
-  let html = header('Holgura', `${dateFmt(c.start)} → ${dateFmt(info.end)}${natural ? '' : ' (aprox.)'} · ${info.remaining === 0 ? 'ciclo terminado' : `quedan ${info.remaining} días`}`);
+  let html = header(BRAND_TITLE, `${dateFmt(c.start)} → ${dateFmt(info.end)}${natural ? '' : ' (aprox.)'} · ${info.remaining === 0 ? 'ciclo terminado' : `quedan ${info.remaining} días`}`);
 
   if (info.paydaySoon) {
     html += natural
@@ -757,8 +759,11 @@ function viewRevisar() {
     ${moneyField('Saldo actual de tu cuenta', 'id="ck-balance"', last ? inputNum(last.amount) : '', `<span id="bk-note">${balanceNote(last)}</span>`)}
     ${B.isReady() ? '<button class="btn ghost block bank-btn" data-act="bank-balance">🏦 Traer saldo del banco</button>' : ''}
     ${pend.mode === 'items' ? `
-      <div class="field"><span>Gastos fijos que <b>ya</b> te han cobrado</span>
-        <small class="hint">${seen ? 'Se marcan solos cuando veo el cargo en tu banco; puedes marcarlos o desmarcarlos tú.' : 'Marca cada uno cuando veas el cargo en tu banco.'} <b id="ck-charged">${chargedText(c.fixedItems.filter(i => !pend.ids.includes(i.id)))}</b></small>
+      <details class="field fixed-fold" id="ck-fixed">
+        <summary><span class="grow"><span>Gastos fijos que <b>ya</b> te han cobrado</span>
+          <small><b id="ck-count">${countText(c.fixedItems.length - pend.ids.length, c.fixedItems.length)}</b> · <span id="ck-charged">${chargedText(c.fixedItems.filter(i => !pend.ids.includes(i.id)))}</span></small></span>
+          <span class="chev">›</span></summary>
+        <small class="hint">${seen ? 'Se marcan solos cuando veo el cargo en tu banco; puedes marcarlos o desmarcarlos tú.' : 'Marca cada uno cuando veas el cargo en tu banco.'}</small>
         <div class="checks">${c.fixedItems.map(i => {
           const tr = tracked?.ids.has(i.id);
           const s = seen?.[i.id];
@@ -775,7 +780,7 @@ function viewRevisar() {
         ${tracked && c.fixedItems.some(i => tracked.ids.has(i.id) && !tracked.paidById[i.id] && i.day && C.chargeDateInCycle(i, c.start) <= today)
           ? '<small class="hint">¿Ya te han cobrado alguno que pone «aún no lo veo»? Márcalo tú y contará su importe. Para que la próxima vez se marque solo, búscalo en <b>Ver movimientos</b>, tócalo y asígnalo a su gasto fijo.</small>' : ''}
         </div>
-      </div>` : c.fixedTotal > 0 ? moneyField('Gastos fijos que aún no te han cobrado', 'id="ck-pending"', numStr(pend.amount), `De tus ${money(c.fixedTotal)} de gastos fijos.`) : ''}
+      </details>` : c.fixedTotal > 0 ? moneyField('Gastos fijos que aún no te han cobrado', 'id="ck-pending"', numStr(pend.amount), `De tus ${money(c.fixedTotal)} de gastos fijos.`) : ''}
     ${showEarly ? `<label class="check solo"><input type="checkbox" id="ck-early"><span>Ya me ha llegado la nómina del mes que viene</span></label>` : ''}
     <label class="field"><span>Fecha</span><input type="date" id="ck-date" value="${today}" min="${c.start}" max="${today}"></label>
     <button class="btn primary block" data-act="checkin-save">Guardar</button>
@@ -785,15 +790,21 @@ function viewRevisar() {
 
   const list = cycleCheckins().reverse();
   if (list.length) {
-    html += `<section class="card"><h3>Revisiones de este ciclo</h3><div class="list">
+    // Plegado: si revisas cada día la lista crece mucho; en el resumen sale la última
+    const lastA = C.analyze(state, list[0]);
+    html += `<section class="card"><details class="analysis checkins-fold">
+      <summary><span class="grow"><h3>Revisiones de este ciclo · ${list.length}</h3>
+        <small><span class="dot dot-${lastA.status}"></span> Última: <b>${dayFmt(list[0].date)}</b> · ${money(list[0].balance)} · ${STATUS[lastA.status].title}</small></span>
+        <span class="chev">›</span></summary>
+      <div class="list">
       ${list.map(k => {
         const a = C.analyze(state, k);
         return `<button class="list-row" data-act="checkin-open" data-id="${k.id}">
           <span class="dot dot-${a.status}"></span>
-          <span class="grow">${dayFmt(k.date)}</span>
+          <span class="grow">${dayFmt(k.date)}<small>Llevas ${money(a.spent)} de ${money(a.available)}</small></span>
           <span class="muted">${money(k.balance)}</span><span class="chev">›</span></button>`;
       }).join('')}
-    </div></section>`;
+      </div></details></section>`;
   }
 
   if (B.isReady()) {
@@ -873,6 +884,7 @@ function renderKeepingForm(seenBefore = null) {
   const checks = Object.fromEntries([...document.querySelectorAll('[data-fixed-id]')].map(el => [el.dataset.fixedId, el.checked]));
   const keep = ['ck-date', 'ck-extra', 'ck-pending'].map(id => [id, $(`#${id}`)?.value]);
   const early = $('#ck-early')?.checked;
+  const open = $('#ck-fixed')?.open;
   render();
   // Lo que acabas de tocar se respeta, salvo los cobros que el banco acaba de mostrar por primera vez: esos se marcan
   const seenNow = C.bankFixedSeen(state) || {};
@@ -880,8 +892,17 @@ function renderKeepingForm(seenBefore = null) {
   for (const el of document.querySelectorAll('[data-fixed-id]')) if (el.dataset.fixedId in checks) el.checked = checks[el.dataset.fixedId];
   for (const [id, v] of keep) if (v != null && $(`#${id}`)) $(`#${id}`).value = v;
   if (early != null && $('#ck-early')) $('#ck-early').checked = early;
-  const counter = $('#ck-charged');
-  if (counter) counter.textContent = chargedText(state.cycle.fixedItems.filter(i => checks[i.id]));
+  if (open && $('#ck-fixed')) $('#ck-fixed').open = true;
+  updateFixedCounter();
+}
+
+// Resumen del desplegable de fijos: cuántos marcados y cuánto suman (se actualiza al tocar una casilla)
+const countText = (n, total) => `${n} de ${total} marcados`;
+function updateFixedCounter() {
+  const boxes = [...document.querySelectorAll('[data-fixed-id]')];
+  const ids = boxes.filter(x => x.checked).map(x => x.dataset.fixedId);
+  if ($('#ck-charged')) $('#ck-charged').textContent = chargedText(state.cycle.fixedItems.filter(i => ids.includes(i.id)));
+  if ($('#ck-count')) $('#ck-count').textContent = countText(ids.length, boxes.length);
 }
 
 function chargedText(marked) {
@@ -925,13 +946,33 @@ function openCheckinResult(id) {
   if (!k) return;
   const a = C.analyze(state, k);
   const canWithdraw = a.status === 'red' && state.jars.length;
-  openSheet('Resultado de la revisión', `
-    ${statusBlock(a, k)}
+  // Lo que había en esta revisión (no lo de hoy): si no es la última, sin los datos en vivo de la semana
+  const isLast = lastCheckin()?.id === k.id;
+  const c = state.cycle;
+  const tracked = C.trackedFixed(state, k.date);
+  const pending = c.fixedItems.filter(i => (k.pendingIds || []).includes(i.id)
+    && !(!k.trackedChecked && tracked?.paidById[i.id])); // las revisiones antiguas guardaban los "según banco" como pendientes
+  const pct = a.available > 0 ? Math.min(100, (Math.max(0, a.spent) / a.available) * 100) : 100;
+  openSheet(`Revisión del ${dayFmt(k.date)}`, `
+    ${statusBlock(a, k, { live: isLast })}
     ${a.elapsed < 5 && !state.history.length ? '<p class="note">Con tan pocos días la previsión es orientativa: al principio del ciclo se suele gastar más (compra grande, recibos…). Se irá afinando con cada revisión.</p>' : ''}
-    <div class="rows compact">
-      <div class="row"><span>Llevas</span><strong>${a.elapsed} de ${a.totalDays} días</strong></div>
-      ${a.pendingFixed ? `<div class="row"><span>Gastos fijos pendientes</span><strong>${money(a.pendingFixed)}</strong></div>` : ''}
-    </div>
+    <section class="card result-sum">
+      <h3>En esta revisión</h3>
+      <div class="sum-block">
+        <span>Gastado del presupuesto del ciclo</span>
+        <p class="week-big ${a.spent > a.available ? 'over' : ''}"><b>${money(Math.max(0, a.spent))}</b><small>de ${money(a.available)}</small></p>
+        <span class="bar week-bar ${a.spent > a.available ? 'over' : ''}"><i style="width:${pct}%"></i></span>
+        <small class="${a.left < 0 ? 'neg' : ''}">${a.left >= 0 ? `Te quedan ${money(a.left)}` : `Te has pasado ${money(-a.left)}`}${a.source === 'bank' ? ' · según tus movimientos del banco' : ' · según tu saldo'}</small>
+      </div>
+      <div class="rows compact">
+        <div class="row"><span>Días que llevas</span><strong>${a.elapsed} de ${a.totalDays}</strong></div>
+        <div class="row"><span>Días que faltan</span><strong>${a.remaining}<small>hasta el ${dayFmt(a.end)}</small></strong></div>
+      </div>
+      ${c.fixedItems.length ? `<details class="analysis pend-fold">
+        <summary><span class="grow"><span>Gastos fijos pendientes</span><small>${pending.length ? `${pending.length} · ${money(sum(pending, i => i.amount))}` : 'Todos cobrados ✓'}</small></span>${pending.length ? '<span class="chev">›</span>' : ''}</summary>
+        ${pending.length ? `<div class="rows compact">${pending.map(i => `<div class="row"><span>${esc(i.name || 'Sin nombre')}${i.day ? `<small>día ${i.day}</small>` : ''}</span><strong>${money(i.amount)}</strong></div>`).join('')}</div>` : ''}
+      </details>` : a.pendingFixed ? `<div class="rows compact"><div class="row"><span>Gastos fijos pendientes</span><strong>${money(a.pendingFixed)}</strong></div></div>` : ''}
+    </section>
     <div class="btn-col">
       ${canWithdraw ? `<button class="btn primary block" data-act="move-new" data-type="out" data-amount="${Math.ceil(a.deficit)}">Retirar de una hucha</button>` : ''}
       <button class="btn ${canWithdraw ? 'ghost' : 'primary'} block" data-act="sheet-close">Entendido</button>
@@ -1218,7 +1259,7 @@ function viewMiMes() {
         <span class="chev">›</span>
       </button>`).join('')}
     </section>
-    <p class="footer">Holgura · v3.11</p>`;
+    <p class="footer">Holgura · v3.14</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -1748,7 +1789,7 @@ const actions = {
     render(); window.scrollTo(0, 0);
     if (tab === 'mimes') loadBankStatus();
   },
-  'spent-open': () => { spentDetail = true; render(); window.scrollTo(0, 0); },
+  'spent-open': () => { closeSheet(); tab = 'inicio'; spentDetail = true; render(); window.scrollTo(0, 0); },
   'spent-back': () => { spentDetail = false; render(); window.scrollTo(0, 0); },
   'mimes-open': el => { mimesSection = el.dataset.sec; render(); window.scrollTo(0, 0); },
   'mimes-back': () => { mimesSection = null; render(); window.scrollTo(0, 0); },
@@ -1988,9 +2029,7 @@ document.addEventListener('change', e => {
     const v = parseMoney(el.value);
     if (Number.isFinite(v) && v !== state.lastBalance?.amount) setLastBalance(v, 'manual');
   } else if (el.dataset.fixedId) {
-    const ids = [...document.querySelectorAll('[data-fixed-id]')].filter(x => x.checked).map(x => x.dataset.fixedId);
-    const counter = $('#ck-charged');
-    if (counter) counter.textContent = chargedText(state.cycle.fixedItems.filter(i => ids.includes(i.id)));
+    updateFixedCounter();
   } else if (el.dataset.budget) {
     const v = Math.max(0, parseMoney(el.value) || 0);
     state.settings.budgets = { ...(state.settings.budgets || {}), [el.dataset.budget]: v };
