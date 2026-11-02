@@ -221,6 +221,7 @@ function statusBlock(a, k) {
         <div><h2>${st.title}</h2><p class="muted">Revisión del ${dayFmt(k.date)} · saldo ${money(k.balance)}</p></div>
       </div>
       <p class="status-text">${statusMessage(a)}</p>
+      <button class="link spent-link" data-act="spent-open">¿De dónde salen estos ${money(a.spent)}? ›</button>
       ${allowanceBlock(a)}
       <div class="stats">
         <div><span>Gastado este ciclo</span><strong>${money(a.spent)}</strong></div>
@@ -413,11 +414,95 @@ function wizNext() {
 
 // ---------- Inicio ----------
 
+// Pantalla que explica de dónde sale lo gastado en el día a día del semáforo
+let spentDetail = false;
+
+function viewSpentDetail(a, k) {
+  const c = state.cycle, d = a.breakdown;
+  const line = (label, value, cls = '', note = '') => `<div class="row ${cls}"><span>${label}${note ? `<small>${note}</small>` : ''}</span><strong>${value}</strong></div>`;
+  const minus = v => `−&nbsp;${money(v)}`, plus = v => `+&nbsp;${money(v)}`;
+  const drop = d.startBalance - d.balance;
+  const ooNet = d.oneOffs.out - d.oneOffs.in;
+  // Fijos "según banco" cuyo día ya pasó y el banco aún no ha reconocido (p. ej. llegan con otro importe)
+  const tracked = C.trackedFixed(state, k.date);
+  const notYet = tracked ? c.fixedItems.filter(i => tracked.ids.has(i.id) && !tracked.paidById[i.id]
+    && i.day && C.chargeDateInCycle(i, c.start) <= k.date) : [];
+
+  let html = `<header class="top">
+      <button class="link back" data-act="spent-back">‹ Inicio</button>
+      <h1 class="sub-title">🧾 Lo gastado este ciclo</h1>
+    </header>
+    <section class="card">
+      <h3>Cómo lo calculo</h3>
+      <p class="muted">Miro cuánto ha bajado tu cuenta desde que cobraste y le quito lo que no es gasto del día a día.</p>
+      <div class="rows breakdown">
+        ${line('Saldo al empezar el ciclo', money(d.startBalance), '', dayFmt(c.start))}
+        ${line('Saldo en tu última revisión', money(d.balance), '', `${dayFmt(k.date)}${d.earlyIncome ? ` · sin contar ${money(d.earlyIncome)} de la nómina siguiente` : ''}`)}
+        ${line('Ha salido de la cuenta', money(drop), 'sub')}
+        ${d.extra ? line('Ingresos extra que han entrado', plus(d.extra), '', 'también se han gastado o siguen en la cuenta') : ''}
+        ${line('Gastos fijos ya cobrados', minus(d.fixedCharged))}
+        ${ooNet ? line(ooNet > 0 ? 'Gastos puntuales' : 'Ingresos puntuales', ooNet > 0 ? minus(ooNet) : plus(-ooNet)) : ''}
+        ${d.moved ? line(d.moved > 0 ? 'Pasado a tus huchas' : 'Sacado de tus huchas', d.moved > 0 ? minus(d.moved) : plus(-d.moved)) : ''}
+        ${d.notMine ? line('Partes que no son tuyas', minus(d.notMine), '', 'gastos compartidos que te devolvieron en efectivo') : ''}
+        ${line('Gastado en el día a día', money(a.variable), 'total')}
+      </div>
+      ${notYet.length ? `<p class="note">Según tu banco aún no te han cobrado <b>${notYet.map(i => esc(i.name || 'Sin nombre')).join(', ')}</b>, así que de momento cuenta${notYet.length > 1 ? 'n' : ''} como gasto del día a día. Si ya te ${notYet.length > 1 ? 'los' : 'lo'} han cobrado, búscalo en <b>Ver movimientos</b>, tócalo y asígnalo a su gasto fijo.</p>` : ''}
+      ${a.variable < 0 ? '<p class="note">Sale negativo: ha bajado menos la cuenta de lo que suman los fijos. Puede que algún fijo marcado como cobrado aún no haya salido.</p>' : ''}
+    </section>`;
+
+  if (d.fixedList.length) {
+    html += `<section class="card">
+      <details class="analysis">
+        <summary><h3>Fijos cobrados · ${money(d.fixedCharged)}</h3><span class="chev">›</span></summary>
+        <div class="rows compact">${d.fixedList.map(i => line(esc(i.name || 'Sin nombre'), money(i.amount), '', i.tracked ? 'según banco' : '')).join('')}</div>
+      </details>
+    </section>`;
+  }
+  if (d.oneOffs.list.length) {
+    html += `<section class="card">
+      <h3>Puntuales</h3>
+      <div class="rows compact">${d.oneOffs.list.map(e => line(esc(e.concept || 'Puntual'), e.amount > 0 ? plus(e.amount) : minus(-e.amount), '', dayFmt(e.date))).join('')}</div>
+    </section>`;
+  }
+
+  // Lo mismo visto con los movimientos del banco, por categoría (aunque no tengan presupuesto)
+  const sp = state.bankSpend?.cycleId === c.id ? state.bankSpend : null;
+  if (sp) {
+    const to = bizumTo();
+    const cats = Object.keys(sp.byCat).filter(cat => !(cat === 'Bizum' && to));
+    if (to && !cats.includes(to) && (sp.byCat.Bizum || sp.bizumIn)) cats.push(to);
+    const rows = cats.map(cat => ({ cat, ...netSpent(cat, sp) })).filter(r => Math.abs(r.net) >= 0.005).sort((x, y) => y.net - x.net);
+    const back = to ? 0 : sp.bizumIn || 0;
+    const total = sum(rows, r => r.net) - back;
+    const budgets = state.settings.budgets || {};
+    const diff = a.variable - total;
+    html += `<section class="card">
+      <h3>Según tus movimientos del banco</h3>
+      <p class="muted">Tus cargos del día a día por categoría, hasta el ${dateFmt(sp.at.slice(0, 10), { day: 'numeric', month: 'long' })}.</p>
+      <div class="rows compact">
+        ${rows.map(r => line(`${icon(r.cat)} ${esc(r.cat)}`, money(r.net), '', [
+          r.back ? `${money(r.gross)} − ${money(r.back)} devuelto por Bizum` : '',
+          budgets[r.cat] > 0 ? '' : 'sin presupuesto',
+        ].filter(Boolean).join(' · '))).join('')}
+        ${back ? line('Bizum recibidos', minus(back)) : ''}
+        ${line('Total en el banco', money(total), 'total')}
+      </div>
+      ${Math.abs(diff) >= 1 ? `<p class="note">Hay <b>${money(Math.abs(diff))}</b> de diferencia con el cálculo por saldo. ${diff > 0
+        ? 'Suele ser algún fijo que ha salido por un importe distinto, un cargo que aún no ha llegado al banco o gastos de antes de la última revisión que el banco aún no ha traído.'
+        : 'Suele ser algún gasto de después de tu última revisión (el banco ya lo trae, el saldo de la revisión no) o un fijo que el banco no ha reconocido como tal.'}</p>` : ''}
+      ${rows.some(r => !(budgets[r.cat] > 0)) ? '<p class="note">Las categorías «sin presupuesto» cuentan como gasto del día a día pero no salen en tu presupuesto del ciclo: por eso lo gastado puede no cuadrar con la suma del presupuesto.</p>' : ''}
+      <button class="btn ghost block" data-act="bank-tx">Ver movimientos</button>
+    </section>`;
+  }
+  return html;
+}
+
 function viewInicio() {
   const c = state.cycle, s = state.settings, today = C.todayStr();
   const info = C.cycleInfo(c, s);
   const last = lastCheckin();
   const a = last ? C.analyze(state, last) : null;
+  if (spentDetail && a) return viewSpentDetail(a, last);
   const rec = C.recommendation(state, a);
   const natural = s.cycleType === 'natural';
 
@@ -654,6 +739,8 @@ function viewRevisar() {
             <em>${money(Math.max(0, tracked.byId[i.id]))} de ${money(i.amount)}</em></div>` : `
           <label class="check"><input type="checkbox" data-fixed-id="${i.id}" ${pend.ids.includes(i.id) ? '' : 'checked'}>
             <span>${esc(i.name || 'Sin nombre')}</span><em>${money(i.amount)}${i.day ? ` · día ${i.day}` : ''}</em></label>`).join('')}
+        ${tracked && c.fixedItems.some(i => tracked.ids.has(i.id) && !tracked.paidById[i.id] && i.day && C.chargeDateInCycle(i, c.start) <= today)
+          ? '<small class="hint">¿Alguno «según banco» ya te lo han cobrado y sale a 0 €? Búscalo en <b>Ver movimientos</b>, tócalo y asígnalo a su gasto fijo.</small>' : ''}
         </div>
       </div>` : c.fixedTotal > 0 ? moneyField('Gastos fijos que aún no te han cobrado', 'id="ck-pending"', numStr(pend.amount), `De tus ${money(c.fixedTotal)} de gastos fijos.`) : ''}
     ${showEarly ? `<label class="check solo"><input type="checkbox" id="ck-early"><span>Ya me ha llegado la nómina del mes que viene</span></label>` : ''}
@@ -1096,7 +1183,7 @@ function viewMiMes() {
         <span class="chev">›</span>
       </button>`).join('')}
     </section>
-    <p class="footer">Holgura · v3.6</p>`;
+    <p class="footer">Holgura · v3.7</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -1359,8 +1446,42 @@ function openTxDetail(i) {
       ${row('Cuenta de contrapartida', t.counterAccount ? 'Sí' : 'No')}
       ${row('Estado', t.pending ? 'Pendiente' : 'Contabilizado')}
     </div>
+    ${state.settings.fixedItems.length ? `<div class="learn">
+      <label class="field"><span>¿Es uno de tus gastos fijos?</span>
+        <select id="tx-fixed">
+          <option value="">Elige el gasto fijo…</option>
+          ${state.settings.fixedItems.map(f => `<option value="${esc(f.id)}">${esc(f.name || 'Sin nombre')}</option>`).join('')}
+        </select>
+        <small>Desde ahora, todo movimiento con este concepto contará para ese gasto con el importe que traiga el banco.</small>
+      </label>
+      <button class="btn primary block" data-act="tx-assign" data-i="${i}">Asignar</button>
+    </div>` : ''}
     <p class="note">Si está mal clasificado, haz una captura de esta pantalla y pásamela para ajustar las reglas.</p>
     <button class="btn ghost block" data-act="bank-tx">‹ Volver a los movimientos</button>`);
+}
+
+// Patrón para reconocer el concepto de un movimiento en los meses siguientes: se saltan las fechas y las
+// referencias largas (cambian cada mes), pero se mantienen los números cortos (p. ej. el final de un préstamo)
+function conceptPattern(t) {
+  const words = String(t.description || t.counterparty || '').replace(/;/g, ' ').toUpperCase().split(/\s+/)
+    .filter(w => w && !/\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}/.test(w) && !/\d{6,}/.test(w)).slice(0, 8);
+  return words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+}
+
+// Asigna un movimiento del banco a un gasto fijo: ese gasto pasa a contar "según banco" con el importe real
+function assignToFixed(t, fixedId) {
+  const item = state.settings.fixedItems.find(f => f.id === fixedId);
+  const match = conceptPattern(t);
+  if (!item || !match) return false;
+  item.key ||= `f-${item.id}`;
+  for (const ci of state.cycle?.fixedItems || []) if (ci.id === item.id) ci.key = item.key;
+  const dir = (t.original ?? t.amount) < 0 ? 'out' : 'in';
+  // Va la primera y por delante del Bizum: es una decisión tuya sobre ese concepto concreto
+  state.rules = [
+    { match, dir, first: true, category: item.category || 'Otros', label: item.name, fixed: true, charge: { [item.key]: '*' } },
+    ...(state.rules || []).filter(r => !(r.match === match && r.dir === dir)),
+  ];
+  return true;
 }
 
 async function openTransactions() {
@@ -1497,9 +1618,12 @@ const actions = {
   tab: el => {
     closeSheet(); tab = el.dataset.tab;
     if (tab === 'mimes') mimesSection = el.dataset.sec || null; // pulsar Mi mes vuelve al menú (o abre el apartado pedido)
+    if (tab === 'inicio') spentDetail = false;
     render(); window.scrollTo(0, 0);
     if (tab === 'mimes') loadBankStatus();
   },
+  'spent-open': () => { spentDetail = true; render(); window.scrollTo(0, 0); },
+  'spent-back': () => { spentDetail = false; render(); window.scrollTo(0, 0); },
   'mimes-open': el => { mimesSection = el.dataset.sec; render(); window.scrollTo(0, 0); },
   'mimes-back': () => { mimesSection = null; render(); window.scrollTo(0, 0); },
   'go-revisar': () => { tab = 'revisar'; render(); window.scrollTo(0, 0); },
@@ -1649,6 +1773,15 @@ const actions = {
   },
   'bank-tx': openTransactions,
   'tx-detail': el => openTxDetail(Number(el.dataset.i)),
+  'tx-assign': el => {
+    const t = txCache[Number(el.dataset.i)];
+    const fixedId = $('#tx-fixed').value;
+    if (!fixedId) return toast('Elige a qué gasto fijo corresponde');
+    if (!t || !assignToFixed(t, fixedId)) return toast('No se ha podido asignar este movimiento');
+    persist();
+    toast(`Asignado a ${state.settings.fixedItems.find(f => f.id === fixedId)?.name || 'ese gasto'}`);
+    openTransactions(); // vuelve a la lista y recalcula presupuesto y fijos con la regla nueva
+  },
   'oneoff-new': el => openOneOffForm(el.dataset.type),
   'oneoff-save': () => {
     const concept = $('#oo-concept').value.trim();

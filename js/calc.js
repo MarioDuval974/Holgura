@@ -384,6 +384,18 @@ export function analyze(state, checkin) {
     planGoal: spendingPlan(available - spent, from, info.end, s), // para cumplir el objetivo de ahorro
     planNoJar: spendingPlan(margin - spent, from, info.end, s),   // para no tocar las huchas
     deficit: Math.max(0, spent - margin),                          // lo que ya falta (saldría de la hucha)
+    // Desglose de lo gastado en el día a día, para explicarlo en pantalla
+    breakdown: {
+      startBalance: c.startBalance, balance, earlyIncome: Number(checkin.earlyIncome) || 0,
+      fixedCharged: round2(fixedCharged),
+      fixedList: (c.fixedItems || []).map(i => ({
+        id: i.id, name: i.name,
+        amount: tracked?.ids.has(i.id) ? tracked.byId[i.id] : ((checkin.pendingIds || []).includes(i.id) ? 0 : i.amount),
+        tracked: Boolean(tracked?.ids.has(i.id)),
+      })).filter(i => Math.abs(i.amount) >= 0.005),
+      moved: round2(moved), extra: round2(extra), notMine: round2(notMine),
+      oneOffs: oo,
+    },
   };
 }
 
