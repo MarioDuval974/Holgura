@@ -282,23 +282,62 @@ export function trackedFixed(state, upTo = '9999-12-31') {
   const c = state.cycle, sp = state.bankSpend;
   const items = (c?.fixedItems || []).filter(i => i.key);
   if (!items.length || sp?.cycleId !== c.id || !sp.fixedCharges) return null;
-  const paid = {}, back = {};
+  const paid = {}, back = {}, when = {};
   for (const f of sp.fixedCharges) {
     if (f.date < c.start || f.date > upTo) continue;
-    if (f.amount >= 0) paid[f.key] = (paid[f.key] || 0) + f.amount;
-    else back[f.key] = (back[f.key] || 0) - f.amount; // te han devuelto tu parte (p. ej. el Bizum de las plataformas)
+    if (f.amount >= 0) {
+      paid[f.key] = (paid[f.key] || 0) + f.amount;
+      if (!(when[f.key] > f.date)) when[f.key] = f.date;
+    } else back[f.key] = (back[f.key] || 0) - f.amount; // te han devuelto tu parte (p. ej. el Bizum de las plataformas)
   }
-  const byId = {}, paidById = {}, backById = {};
+  const byId = {}, paidById = {}, backById = {}, paidDateById = {};
   let charged = 0, over = 0;
   for (const i of items) {
     const a = round2((paid[i.key] || 0) - (back[i.key] || 0));
     byId[i.id] = a;
     paidById[i.id] = round2(paid[i.key] || 0);
     backById[i.id] = round2(back[i.key] || 0);
+    paidDateById[i.id] = when[i.key] || null;
     charged += a;
     over += Math.max(0, a - i.amount); // p. ej. una sesión de más: el fijo de este ciclo sube
   }
-  return { byId, paidById, backById, ids: new Set(items.map(i => i.id)), charged: round2(charged), over: round2(over) };
+  return { byId, paidById, backById, paidDateById, ids: new Set(items.map(i => i.id)), charged: round2(charged), over: round2(over) };
+}
+
+// Palabras del nombre de un gasto fijo que sirven para reconocerlo en el concepto del banco
+const NAME_STOP = new Set(['GASTO', 'GASTOS', 'CUOTA', 'RECIBO', 'PAGO', 'MENSUAL', 'TRIMESTRAL', 'ANUAL', 'PARA', 'DEVUELVEN', 'SESION']);
+export const plainUpper = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+const nameWords = name => plainUpper(name).split(/[^A-Z0-9]+/).filter(w => w.length >= 4 && /[A-Z]/.test(w) && !NAME_STOP.has(w));
+
+// Gastos fijos cuyo cobro ya se ve en los movimientos del banco: { id: { amount, date } }.
+// Los "según banco" por su regla; el resto, por un cargo del mismo importe con su nombre en el concepto
+// (o, si no hay ninguno así, un cargo de gasto fijo del mismo importe). null si no hay datos del banco.
+export function bankFixedSeen(state, upTo = '9999-12-31') {
+  const c = state.cycle, sp = state.bankSpend;
+  if (!c?.fixedItems?.length || sp?.cycleId !== c.id) return null;
+  const out = {};
+  const tracked = trackedFixed(state, upTo);
+  if (tracked) for (const id of tracked.ids) if (tracked.paidById[id] > 0) out[id] = { amount: tracked.byId[id], date: tracked.paidDateById[id] };
+  const seen = (sp.seen || []).filter(t => t.date >= c.start && t.date <= upTo);
+  const used = new Set();
+  const items = c.fixedItems.filter(i => !out[i.id] && i.amount > 0);
+  // Un "según banco" que su regla no ha reconocido (p. ej. la cuota cambia unos céntimos) se acepta por nombre
+  // con un importe parecido; el resto necesita el importe exacto
+  const pick = (i, byName) => {
+    const tr = tracked?.ids.has(i.id);
+    if (tr && !byName) return -1;
+    const words = nameWords(i.name);
+    return seen.findIndex((t, n) => !used.has(n) && Math.abs(t.amount - i.amount) < (tr ? i.amount * 0.15 : 0.01)
+      && (byName ? words.some(w => t.text.includes(w)) : t.fixed));
+  };
+  for (const byName of [true, false]) {
+    for (const i of items) {
+      if (out[i.id]) continue;
+      const n = pick(i, byName);
+      if (n >= 0) { used.add(n); out[i.id] = { amount: seen[n].amount, date: seen[n].date }; }
+    }
+  }
+  return out;
 }
 
 // Gastos fijos del ciclo contando lo que se haya pasado de lo previsto en los "según banco"
@@ -343,12 +382,25 @@ export function analyze(state, checkin) {
     : Number(checkin.pendingFixed) || 0;
   let fixedCharged = c.fixedTotal - pendingFixed;
   let fixedTotal = c.fixedTotal;
-  // Los fijos "según banco" no usan el check: cuenta lo realmente retirado hasta el día de la revisión
+  // Los fijos "según banco" cuentan lo realmente retirado hasta el día de la revisión. Desde la v3.8 también
+  // tienen check: si lo marcas y el banco aún no lo ha reconocido, cuenta su importe; si lo desmarcas, no cuenta.
   const tracked = trackedFixed(state, checkin.date);
+  const chargedById = {};
   if (tracked) {
-    const markedTracked = sum(c.fixedItems.filter(i => tracked.ids.has(i.id) && !(checkin.pendingIds || []).includes(i.id)), i => i.amount);
-    fixedCharged = fixedCharged - markedTracked + tracked.charged;
-    fixedTotal += tracked.over;
+    const pend = checkin.pendingIds || [];
+    const seen = checkin.trackedChecked ? bankFixedSeen(state, checkin.date) || {} : {};
+    let over = 0;
+    for (const i of c.fixedItems.filter(x => tracked.ids.has(x.id))) {
+      const marked = !pend.includes(i.id);
+      // Marcado sin cargo reconocido por su regla: el importe que trae el banco si se ve por el nombre; si no, el previsto
+      const amt = !checkin.trackedChecked ? tracked.byId[i.id]
+        : marked ? (tracked.paidById[i.id] ? tracked.byId[i.id] : (seen[i.id]?.amount ?? i.amount) - tracked.backById[i.id])
+        : -tracked.backById[i.id];
+      chargedById[i.id] = round2(amt);
+      fixedCharged += amt - (marked ? i.amount : 0);
+      if (!checkin.trackedChecked || marked) over += Math.max(0, amt - i.amount);
+    }
+    fixedTotal += round2(over);
     pendingFixed = Math.max(0, fixedTotal - fixedCharged);
   }
   // Si ya ha llegado la nómina del siguiente ciclo (mes natural), no cuenta para este
@@ -390,7 +442,7 @@ export function analyze(state, checkin) {
       fixedCharged: round2(fixedCharged),
       fixedList: (c.fixedItems || []).map(i => ({
         id: i.id, name: i.name,
-        amount: tracked?.ids.has(i.id) ? tracked.byId[i.id] : ((checkin.pendingIds || []).includes(i.id) ? 0 : i.amount),
+        amount: i.id in chargedById ? chargedById[i.id] : ((checkin.pendingIds || []).includes(i.id) ? 0 : i.amount),
         tracked: Boolean(tracked?.ids.has(i.id)),
       })).filter(i => Math.abs(i.amount) >= 0.005),
       moved: round2(moved), extra: round2(extra), notMine: round2(notMine),
@@ -409,8 +461,15 @@ export function closeCycle(state, endDate, endBalance) {
   // Igual que en la revisión: los fijos "según banco" cuentan lo que de verdad salió (más o menos de lo previsto)
   // y de los cargos con ajuste solo cuenta tu parte; si no, el gasto del día a día aprendido sale inflado
   const tracked = trackedFixed(state, endDate);
+  // Los que el banco no reconoció pero marcaste como cobrados en tu última revisión cuentan su importe
+  const lastK = state.checkins.filter(k => k.cycleId === c.id && k.date <= endDate).sort((a, b) => a.date.localeCompare(b.date)).pop();
+  const seen = tracked && lastK?.trackedChecked ? bankFixedSeen(state, endDate) || {} : {};
+  const markedOnly = tracked && lastK?.trackedChecked
+    ? sum(c.fixedItems.filter(i => tracked.ids.has(i.id) && !tracked.paidById[i.id] && !(lastK.pendingIds || []).includes(i.id)),
+      i => seen[i.id]?.amount ?? i.amount)
+    : 0;
   const fixed = tracked
-    ? round2(c.fixedTotal - sum(c.fixedItems.filter(i => tracked.ids.has(i.id)), i => i.amount) + tracked.charged)
+    ? round2(c.fixedTotal - sum(c.fixedItems.filter(i => tracked.ids.has(i.id)), i => i.amount) + tracked.charged + markedOnly)
     : c.fixedTotal;
   const notMine = sum((state.adjustments || []).filter(a => a.date >= c.start && a.date <= endDate),
     a => Math.abs(a.amount) - a.counted);

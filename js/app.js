@@ -425,8 +425,10 @@ function viewSpentDetail(a, k) {
   const ooNet = d.oneOffs.out - d.oneOffs.in;
   // Fijos "según banco" cuyo día ya pasó y el banco aún no ha reconocido (p. ej. llegan con otro importe)
   const tracked = C.trackedFixed(state, k.date);
+  // (los que marcaste a mano en la revisión ya cuentan como cobrados)
   const notYet = tracked ? c.fixedItems.filter(i => tracked.ids.has(i.id) && !tracked.paidById[i.id]
-    && i.day && C.chargeDateInCycle(i, c.start) <= k.date) : [];
+    && i.day && C.chargeDateInCycle(i, c.start) <= k.date
+    && !(k.trackedChecked && !(k.pendingIds || []).includes(i.id))) : [];
 
   let html = `<header class="top">
       <button class="link back" data-act="spent-back">‹ Inicio</button>
@@ -446,7 +448,7 @@ function viewSpentDetail(a, k) {
         ${d.notMine ? line('Partes que no son tuyas', minus(d.notMine), '', 'gastos compartidos que te devolvieron en efectivo') : ''}
         ${line('Gastado en el día a día', money(a.variable), 'total')}
       </div>
-      ${notYet.length ? `<p class="note">Según tu banco aún no te han cobrado <b>${notYet.map(i => esc(i.name || 'Sin nombre')).join(', ')}</b>, así que de momento cuenta${notYet.length > 1 ? 'n' : ''} como gasto del día a día. Si ya te ${notYet.length > 1 ? 'los' : 'lo'} han cobrado, búscalo en <b>Ver movimientos</b>, tócalo y asígnalo a su gasto fijo.</p>` : ''}
+      ${notYet.length ? `<p class="note">Según tu banco aún no te han cobrado <b>${notYet.map(i => esc(i.name || 'Sin nombre')).join(', ')}</b>, así que de momento cuenta${notYet.length > 1 ? 'n' : ''} como gasto del día a día. Si ya te ${notYet.length > 1 ? 'los' : 'lo'} han cobrado, márca${notYet.length > 1 ? 'los' : 'lo'} en tu próxima revisión, o búscalo en <b>Ver movimientos</b> y asígnalo a su gasto fijo para que se marque solo.</p>` : ''}
       ${a.variable < 0 ? '<p class="note">Sale negativo: ha bajado menos la cuenta de lo que suman los fijos. Puede que algún fijo marcado como cobrado aún no haya salido.</p>' : ''}
     </section>`;
 
@@ -702,10 +704,15 @@ function historyCard() {
 function pendingDefaults() {
   const c = state.cycle, last = lastCheckin(), today = C.todayStr();
   if (!c.fixedItems.length) return { mode: 'total', amount: last ? last.pendingFixed : c.fixedTotal };
+  const tracked = C.trackedFixed(state);
+  const seen = C.bankFixedSeen(state) || {};
   const ids = c.fixedItems.filter(i => {
     const d = C.chargeDateInCycle(i, c.start);
-    const lastSays = last ? (last.pendingIds || []).includes(i.id) : true;
-    if (!d) return lastSays;
+    // Las revisiones de antes de la v3.8 no guardaban el check de los "según banco"
+    const lastSays = !last || (tracked?.ids.has(i.id) && !last.trackedChecked) ? true : (last.pendingIds || []).includes(i.id);
+    // Si el banco ya muestra el cobro, se marca solo (salvo que lo desmarcaras en una revisión posterior)
+    if (seen[i.id]) return last?.trackedChecked && last.date >= seen[i.id].date ? lastSays : false;
+    if (!d || tracked?.ids.has(i.id)) return lastSays; // los "según banco" sin cobro visto: lo que marcaste tú
     if (d > today) return true;
     // Ya pasó el día de cobro: si revisaste después de esa fecha, manda lo que marcaste
     // (un recibo puede llegar más tarde, p. ej. el primer día laborable)
@@ -720,6 +727,7 @@ function viewRevisar() {
   const pend = pendingDefaults();
   const last = lastBalance();
   const tracked = C.trackedFixed(state);
+  const seen = C.bankFixedSeen(state);
   const [y, m, d] = today.split('-').map(Number);
   const showEarly = s.cycleType === 'natural' && d >= Math.min(s.payDay, 28) - 4;
 
@@ -731,16 +739,22 @@ function viewRevisar() {
     ${B.isReady() ? '<button class="btn ghost block bank-btn" data-act="bank-balance">🏦 Traer saldo del banco</button>' : ''}
     ${pend.mode === 'items' ? `
       <div class="field"><span>Gastos fijos que <b>ya</b> te han cobrado</span>
-        <small class="hint">Marca cada uno cuando veas el cargo en tu banco. <b id="ck-charged">${chargedText(c.fixedItems.filter(i => !pend.ids.includes(i.id)))}</b></small>
-        <div class="checks">${c.fixedItems.map(i => tracked?.ids.has(i.id) ? `
-          <div class="check auto"><span class="auto-mark ${tracked.paidById[i.id] ? 'on' : ''}">${tracked.paidById[i.id] ? '✓' : ''}</span>
-            <span>${esc(i.name || 'Sin nombre')}<small>Según tu banco${tracked.backById[i.id]
-              ? ` · ${tracked.paidById[i.id] ? `${money(tracked.paidById[i.id])} pagado − ` : ''}${money(tracked.backById[i.id])} devuelto` : ''}</small></span>
-            <em>${money(Math.max(0, tracked.byId[i.id]))} de ${money(i.amount)}</em></div>` : `
+        <small class="hint">${seen ? 'Se marcan solos cuando veo el cargo en tu banco; puedes marcarlos o desmarcarlos tú.' : 'Marca cada uno cuando veas el cargo en tu banco.'} <b id="ck-charged">${chargedText(c.fixedItems.filter(i => !pend.ids.includes(i.id)))}</b></small>
+        <div class="checks">${c.fixedItems.map(i => {
+          const tr = tracked?.ids.has(i.id);
+          const s = seen?.[i.id];
+          const differs = s && Math.abs(s.amount - i.amount) >= 0.01;
+          const note = [
+            s ? `en tu banco el ${dayFmt(s.date)}` : tr ? 'según tu banco · aún no lo veo' : i.day ? `día ${i.day}` : '',
+            differs ? `previsto ${money(i.amount)}` : '',
+            tr && tracked.backById[i.id] ? `${money(tracked.backById[i.id])} devuelto` : '',
+          ].filter(Boolean).join(' · ');
+          return `
           <label class="check"><input type="checkbox" data-fixed-id="${i.id}" ${pend.ids.includes(i.id) ? '' : 'checked'}>
-            <span>${esc(i.name || 'Sin nombre')}</span><em>${money(i.amount)}${i.day ? ` · día ${i.day}` : ''}</em></label>`).join('')}
+            <span>${esc(i.name || 'Sin nombre')}${note ? `<small>${note}</small>` : ''}</span><em>${money(differs ? Math.max(0, s.amount) : i.amount)}</em></label>`;
+        }).join('')}
         ${tracked && c.fixedItems.some(i => tracked.ids.has(i.id) && !tracked.paidById[i.id] && i.day && C.chargeDateInCycle(i, c.start) <= today)
-          ? '<small class="hint">¿Alguno «según banco» ya te lo han cobrado y sale a 0 €? Búscalo en <b>Ver movimientos</b>, tócalo y asígnalo a su gasto fijo.</small>' : ''}
+          ? '<small class="hint">¿Ya te han cobrado alguno que pone «aún no lo veo»? Márcalo tú y contará su importe. Para que la próxima vez se marque solo, búscalo en <b>Ver movimientos</b>, tócalo y asígnalo a su gasto fijo.</small>' : ''}
         </div>
       </div>` : c.fixedTotal > 0 ? moneyField('Gastos fijos que aún no te han cobrado', 'id="ck-pending"', numStr(pend.amount), `De tus ${money(c.fixedTotal)} de gastos fijos.`) : ''}
     ${showEarly ? `<label class="check solo"><input type="checkbox" id="ck-early"><span>Ya me ha llegado la nómina del mes que viene</span></label>` : ''}
@@ -836,11 +850,14 @@ function openOneOffForm(type) {
 
 // Cobrados hasta ahora: los marcados a mano + lo retirado de verdad para los fijos "según banco"
 // Redibuja Revisar sin perder lo que ya habías tocado en el formulario (checks, fecha, ingresos extra)
-function renderKeepingForm() {
+function renderKeepingForm(seenBefore = null) {
   const checks = Object.fromEntries([...document.querySelectorAll('[data-fixed-id]')].map(el => [el.dataset.fixedId, el.checked]));
   const keep = ['ck-date', 'ck-extra', 'ck-pending'].map(id => [id, $(`#${id}`)?.value]);
   const early = $('#ck-early')?.checked;
   render();
+  // Lo que acabas de tocar se respeta, salvo los cobros que el banco acaba de mostrar por primera vez: esos se marcan
+  const seenNow = C.bankFixedSeen(state) || {};
+  if (seenBefore) for (const id of Object.keys(seenNow)) if (!seenBefore[id]) checks[id] = true;
   for (const el of document.querySelectorAll('[data-fixed-id]')) if (el.dataset.fixedId in checks) el.checked = checks[el.dataset.fixedId];
   for (const [id, v] of keep) if (v != null && $(`#${id}`)) $(`#${id}`).value = v;
   if (early != null && $('#ck-early')) $('#ck-early').checked = early;
@@ -849,9 +866,10 @@ function renderKeepingForm() {
 }
 
 function chargedText(marked) {
+  // Los "según banco" ya cobrados cuentan lo que salió de verdad; el resto, su importe
   const tracked = C.trackedFixed(state);
-  const manual = sum(marked.filter(i => !tracked?.ids.has(i.id)), i => i.amount);
-  return `Cobrados: ${money(manual + (tracked?.charged || 0))} de ${money(C.cycleFixedTotal(state))}.`;
+  const charged = sum(marked, i => (tracked?.paidById[i.id] ? tracked.byId[i.id] : i.amount));
+  return `Cobrados: ${money(charged)} de ${money(C.cycleFixedTotal(state))}.`;
 }
 
 function saveCheckin() {
@@ -863,15 +881,13 @@ function saveCheckin() {
   if (c.fixedItems.length) {
     // Marcado = ya cobrado; los que quedan sin marcar son los pendientes
     pendingIds = [...document.querySelectorAll('[data-fixed-id]')].filter(el => !el.checked).map(el => el.dataset.fixedId);
-    // Los "según banco" se guardan como pendientes: si algún día no hay datos del banco, no cuentan como gastados
-    const tracked = C.trackedFixed(state);
-    if (tracked) pendingIds.push(...tracked.ids);
     pendingFixed = sum(c.fixedItems.filter(i => pendingIds.includes(i.id)), i => i.amount);
   } else if ($('#ck-pending')) {
     pendingFixed = Math.min(c.fixedTotal, Math.max(0, parseMoney($('#ck-pending').value) || 0));
   }
   const k = {
     id: S.uid(), cycleId: c.id, date, balance, pendingFixed, pendingIds,
+    trackedChecked: true, // los "según banco" también llevan check (antes de la v3.8 se guardaban siempre como pendientes)
     extraIncome: 0, // los ingresos extra ahora van en "Ingresos y gastos puntuales" del ciclo
     earlyIncome: $('#ck-early')?.checked ? Number(state.settings.salary) || 0 : 0,
   };
@@ -1183,7 +1199,7 @@ function viewMiMes() {
         <span class="chev">›</span>
       </button>`).join('')}
     </section>
-    <p class="footer">Holgura · v3.7</p>`;
+    <p class="footer">Holgura · v3.8</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -1758,9 +1774,10 @@ const actions = {
       const b = await B.balance();
       $('#ck-balance').value = inputNum(b.amount);
       setLastBalance(b.amount, 'bank');
-      // De paso se leen los movimientos, para que los fijos "según banco" (los que pagas por transferencia o Bizum) estén al día
+      // De paso se leen los movimientos: así se marcan solos los gastos fijos que ya te han cobrado
+      const seenBefore = C.bankFixedSeen(state) || {};
       await refreshSpend({ silent: true });
-      if (tab === 'revisar') renderKeepingForm();
+      if (tab === 'revisar') renderKeepingForm(seenBefore);
       const note = $('#bk-note');
       if (note) note.textContent = `${balanceNote(state.lastBalance)} Puedes corregirlo antes de guardar.`;
       toast('Saldo y movimientos traídos del banco');

@@ -132,9 +132,15 @@ export function spendByCategory(list) {
   const byCat = {}, byDay = {}, bizumByDay = {};
   const fixedCharges = []; // lo que ha salido para gastos fijos "según banco" { date, key, amount }
   const oneOffs = [];      // puntuales detectados en el banco (impuestos, Hacienda…) { date, amount, concept }
+  const seen = [];         // cargos que pueden ser un gasto fijo sin regla propia, para marcarlo en Revisar { date, amount, text, fixed }
   const add = (obj, key, v) => { obj[key] = Math.round(((obj[key] || 0) + v) * 100) / 100; };
   let bizumIn = 0;
   for (const t of list) {
+    if (t.amount < 0 && !t.charge && t.date && t.category !== 'Impuestos') {
+      const text = `${t.description || ''} ${t.counterparty || ''}`.replace(/;/g, ' ')
+        .normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().slice(0, 120);
+      seen.push({ date: t.date, amount: Math.round(-(t.original ?? t.amount) * 100) / 100, text, fixed: Boolean(t.fixed) });
+    }
     if (t.category === 'Impuestos') {
       oneOffs.push({ date: t.date, amount: t.amount, concept: t.label || t.description || 'Impuestos' });
       continue;
@@ -156,5 +162,5 @@ export function spendByCategory(list) {
     add(byCat, t.category, -t.amount);
     if (t.date) add(byDay, t.date, -t.amount); // gasto del día a día por fecha
   }
-  return { byCat, byDay, bizumByDay, fixedCharges, oneOffs, bizumIn: Math.round(bizumIn * 100) / 100 };
+  return { byCat, byDay, bizumByDay, fixedCharges, oneOffs, seen, bizumIn: Math.round(bizumIn * 100) / 100 };
 }

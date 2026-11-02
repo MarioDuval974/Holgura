@@ -26,7 +26,7 @@ export function defaultState() {
       bizumTo: 'Restaurantes y bares', // los Bizum que te devuelven se restan de esta categoría ('' = aparte)
     },
     cycle: null,                // { id, start, startBalance, income, fixedTotal, fixedItems, savingsGoal }
-    checkins: [],               // { id, cycleId, date, balance, pendingFixed, pendingIds, extraIncome }
+    checkins: [],               // { id, cycleId, date, balance, pendingFixed, pendingIds, trackedChecked, extraIncome }
     history: [],                // ciclos cerrados (ver calc.closeCycle)
     jars: [],                   // { id, name, emoji, goal }
     moves: [],                  // { id, jarId, date, type: 'in'|'out', amount, note, account, cycleId }
