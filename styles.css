@@ -396,3 +396,15 @@ details.more[open] summary::before { content: '－ '; }
 .rows.breakdown .row span small, .rows.compact .row span small { display: block; font-size: 12px; margin-top: 1px; }
 .row.sub { border-top: 1px dashed var(--line); margin-top: 2px; }
 .row.sub span { color: var(--ink); }
+
+/* Semáforo → Semana: lo que llevas gastado esta semana, en grande */
+.week-big { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin: 8px 0 8px; font-variant-numeric: tabular-nums; }
+.week-big small { font-size: 14px; color: var(--muted); }
+.week-big b { font-size: 30px; letter-spacing: -.02em; line-height: 1.1; }
+.week-big.over b { color: var(--red); }
+.bar.week-bar { height: 8px; }
+.bar.week-bar i { background: var(--green); }
+.bar.week-bar.over i { background: var(--red); }
+.week-left { display: block; margin-top: 6px; font-size: 13px; color: var(--muted); }
+
+.tx-desc small .tap { color: var(--brand); font-weight: 600; }

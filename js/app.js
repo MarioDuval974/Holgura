@@ -179,12 +179,20 @@ function allowanceBlock(a) {
   const plan = live ? live.plan : useGoal ? a.planGoal : a.planNoJar;
   let body;
   if (s.allowanceView === 'semana') {
-    body = `<div class="allow-grid">
-      <div><span>Esta semana<small>${live ? `del ${dateFmt(live.week.from, { weekday: 'short', day: 'numeric' })} al ${dateFmt(live.week.until, { weekday: 'short', day: 'numeric' })}` : `de hoy al ${dayFmt(plan.weekUntil)}`}</small></span>
-        <strong>${money(live ? live.week.allowance : plan.thisWeek)}</strong>
-        ${live ? progress('Llevas', live.week.spent, live.week.allowance) : ''}</div>
-      <div><span>Semana completa<small>de lunes a domingo</small></span><strong>${money(plan.fullWeek)}</strong></div>
-    </div>`;
+    // Todo en una: lo que llevas gastado esta semana, en grande, frente a lo que puedes gastar
+    const range = live
+      ? `del ${dateFmt(live.week.from, { weekday: 'short', day: 'numeric' })} al ${dateFmt(live.week.until, { weekday: 'short', day: 'numeric' })}`
+      : `de hoy al ${dayFmt(plan.weekUntil)}`;
+    let inner;
+    if (live) {
+      const { spent, allowance } = live.week, left = allowance - Math.max(0, spent);
+      inner = `<p class="week-big ${left < -0.005 ? 'over' : ''}"><small>Llevas</small><b>${money(Math.max(0, spent))}</b><small>de ${money(allowance)}</small></p>
+        <span class="bar week-bar ${left < -0.005 ? 'over' : ''}"><i style="width:${allowance > 0 ? Math.min(100, (Math.max(0, spent) / allowance) * 100) : 100}%"></i></span>
+        <small class="week-left ${left < -0.005 ? 'neg' : ''}">${left >= -0.005 ? `Te quedan ${money(left)} esta semana` : `Te has pasado ${money(-left)} esta semana`}</small>`;
+    } else {
+      inner = `<strong>${money(plan.thisWeek)}</strong>`;
+    }
+    body = `<div class="allow-grid one week"><div><span>Esta semana<small>${range}</small></span>${inner}</div></div>`;
   } else if (C.effectiveSettings(state).weekendFactor === 1) {
     body = `<div class="allow-grid one"><div><span>Cada día</span><strong>${money(plan.weekday)}</strong>
       ${live ? progress('Hoy llevas', live.today.spent, live.today.allowance) : ''}</div></div>`;
@@ -1199,7 +1207,7 @@ function viewMiMes() {
         <span class="chev">›</span>
       </button>`).join('')}
     </section>
-    <p class="footer">Holgura · v3.8</p>`;
+    <p class="footer">Holgura · v3.9</p>`;
 }
 
 // ---------- Presupuesto por categorías ----------
@@ -1462,6 +1470,16 @@ function openTxDetail(i) {
       ${row('Cuenta de contrapartida', t.counterAccount ? 'Sí' : 'No')}
       ${row('Estado', t.pending ? 'Pendiente' : 'Contabilizado')}
     </div>
+    ${!t.fixed && conceptPattern(t) ? `<div class="learn">
+      <label class="field"><span>${t.category === 'Otros' ? '¿De qué categoría es?' : `¿No es de ${esc(t.category)}? Cámbiala`}</span>
+        <select id="tx-cat">
+          <option value="">Elige la categoría…</option>
+          ${CATEGORY_NAMES.filter(c => c !== t.category).map(c => `<option value="${c}">${icon(c)} ${c}</option>`).join('')}
+        </select>
+        <small>Desde ahora, todo movimiento con este concepto irá a esa categoría.</small>
+      </label>
+      <button class="btn primary block" data-act="tx-categorize" data-i="${i}">Guardar categoría</button>
+    </div>` : ''}
     ${state.settings.fixedItems.length ? `<div class="learn">
       <label class="field"><span>¿Es uno de tus gastos fijos?</span>
         <select id="tx-fixed">
@@ -1482,6 +1500,18 @@ function conceptPattern(t) {
   const words = String(t.description || t.counterparty || '').replace(/;/g, ' ').toUpperCase().split(/\s+/)
     .filter(w => w && !/\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}/.test(w) && !/\d{6,}/.test(w)).slice(0, 8);
   return words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+}
+
+// Manda a una categoría todos los movimientos con el mismo concepto. Va detrás de las reglas de gastos fijos
+// (así nunca les quita un cargo) y delante de las demás
+function categorizeConcept(t, category) {
+  const match = conceptPattern(t);
+  if (!match || !CATEGORY_NAMES.includes(category)) return false;
+  const dir = (t.original ?? t.amount) < 0 ? 'out' : 'in';
+  const rest = (state.rules || []).filter(r => !(r.match === match && r.dir === dir && !r.fixed));
+  const fixed = rest.filter(r => r.fixed), others = rest.filter(r => !r.fixed);
+  state.rules = [...fixed, { match, dir, category, label: null }, ...others];
+  return true;
 }
 
 // Asigna un movimiento del banco a un gasto fijo: ese gasto pasa a contar "según banco" con el importe real
@@ -1537,7 +1567,7 @@ async function openTransactions() {
         <div class="list">${list.filter(t => t.date === d).map(t => `
           <button class="list-row" data-act="tx-detail" data-i="${list.indexOf(t)}">
             <span class="mv ${t.amount >= 0 ? 'in' : 'out'}">${icon(t.category)}</span>
-            <span class="grow tx-desc">${esc(t.description)}<small>${esc(t.label || t.category)}${t.adjusted ? ` · cuenta ${money(t.adjusted.counted)}` : ''}${t.pending ? ' · pendiente' : ''}</small></span>
+            <span class="grow tx-desc">${esc(t.description)}<small>${esc(t.label || t.category)}${t.category === 'Otros' && !t.fixed ? ' · <b class="tap">toca para categorizar</b>' : ''}${t.adjusted ? ` · cuenta ${money(t.adjusted.counted)}` : ''}${t.pending ? ' · pendiente' : ''}</small></span>
             <strong class="${raw(t) < 0 ? 'neg' : 'pos'}">${raw(t) < 0 ? '− ' : '+ '}${money(Math.abs(raw(t)))}</strong>
           </button>`).join('')}</div>`).join('') : '<p class="muted center">No hay movimientos en este ciclo.</p>'}`);
     txCache = list;
@@ -1798,6 +1828,15 @@ const actions = {
     persist();
     toast(`Asignado a ${state.settings.fixedItems.find(f => f.id === fixedId)?.name || 'ese gasto'}`);
     openTransactions(); // vuelve a la lista y recalcula presupuesto y fijos con la regla nueva
+  },
+  'tx-categorize': el => {
+    const t = txCache[Number(el.dataset.i)];
+    const category = $('#tx-cat').value;
+    if (!category) return toast('Elige una categoría');
+    if (!t || !categorizeConcept(t, category)) return toast('No se ha podido cambiar la categoría');
+    persist();
+    toast(`Guardado en ${category}`);
+    openTransactions(); // vuelve a la lista y recalcula el presupuesto con la regla nueva
   },
   'oneoff-new': el => openOneOffForm(el.dataset.type),
   'oneoff-save': () => {
